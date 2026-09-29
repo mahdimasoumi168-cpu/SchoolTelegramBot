@@ -1096,6 +1096,14 @@ async def init_db():
             await s.commit()
 
 
+async def post_shutdown(app: Application):
+    await release_poll_lock()
+    try:
+        await engine.dispose()
+    except Exception:
+        log.exception("database engine shutdown failed")
+
+
 async def post_init(app: Application):
     await init_db()
     await acquire_poll_lock()
