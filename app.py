@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from sqlalchemy import (
     BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text,
-    UniqueConstraint, select, delete, or_
+    UniqueConstraint, select, delete, or_, text
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -38,6 +38,31 @@ if not DATABASE_URL:
 TZ = ZoneInfo(TIMEZONE)
 engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+# PostgreSQL advisory lock: guarantees that only one bot process can poll
+# Telegram at a time, even while Railway temporarily overlaps deployments.
+POLL_LOCK_CONN = None
+POLL_LOCK_ID = 7165912028
+
+async def acquire_poll_lock():
+    global POLL_LOCK_CONN
+    if engine.dialect.name != "postgresql":
+        return
+    conn = await engine.connect()
+    await conn.execute(text("SELECT pg_advisory_lock(:lock_id)"), {"lock_id": POLL_LOCK_ID})
+    POLL_LOCK_CONN = conn
+    log.info("Telegram polling lock acquired")
+
+
+async def release_poll_lock():
+    global POLL_LOCK_CONN
+    if POLL_LOCK_CONN is not None:
+        try:
+            await POLL_LOCK_CONN.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": POLL_LOCK_ID})
+        finally:
+            await POLL_LOCK_CONN.close()
+            POLL_LOCK_CONN = None
+            log.info("Telegram polling lock released")
 
 
 class Base(DeclarativeBase):
@@ -1033,13 +1058,14 @@ async def init_db():
 
 async def post_init(app: Application):
     await init_db()
+    await acquire_poll_lock()
     if app.job_queue:
         app.job_queue.run_repeating(scheduled_job, interval=60, first=10)
     log.info("School bot initialized")
 
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:"))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
