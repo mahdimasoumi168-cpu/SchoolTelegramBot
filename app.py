@@ -460,9 +460,8 @@ async def show_admin(update, context, u):
             data = (await s.execute(select(Question, User).join(User, Question.student_user_id == User.id).order_by(Question.id.desc()).limit(50))).all()
             await update.message.reply_text("\n\n".join(f"#{q.id} [{q.status}] {usr.name}\n{q.text}\nپاسخ: {q.answer or '---'}" for q, usr in data) or "سؤالی ثبت نشده.")
     elif t == "👥 مدیریت کاربران":
-        async with SessionLocal() as s:
-            data = (await s.execute(select(User).order_by(User.id.desc()).limit(100))).scalars().all()
-            await update.message.reply_text("\n".join(f"{x.telegram_id} | {x.name} | {ROLE_NAMES.get(x.role,x.role)} | active={x.active}" for x in data))
+        context.user_data["state"] = "admin_user"
+        await update.message.reply_text("برای تغییر/ثبت نقش:\ntelegram_id|نام|STUDENT یا ASSIGNER یا ADMIN\nبرای غیرفعال‌کردن: telegram_id|نام|PENDING")
     elif t in ("📊 گزارش‌ها", "📋 گزارش فعالیت‌ها", "🕐 تاریخچه تغییرات"):
         async with SessionLocal() as s:
             users = await s.scalar(select(User).count()) if False else None
@@ -568,7 +567,20 @@ async def process_state(update, context, u):
     if u.role == "ADMIN":
         try:
             async with SessionLocal() as s:
-                if state == "admin_class":
+                if state == "admin_user":
+                    tid, name, role = [x.strip() for x in text.split("|", 2)]
+                    role = role.upper()
+                    if role not in ("STUDENT", "ASSIGNER", "ADMIN", "PENDING"):
+                        raise ValueError("نقش باید STUDENT یا ASSIGNER یا ADMIN یا PENDING باشد.")
+                    target = (await s.execute(select(User).where(User.telegram_id == int(tid)))).scalar_one_or_none()
+                    if not target:
+                        target = User(telegram_id=int(tid), name=name, role=role, active=(role != "PENDING"))
+                        s.add(target)
+                    else:
+                        target.name, target.role, target.active = name, role, (role != "PENDING")
+                    await s.commit()
+                    await update.message.reply_text("نقش کاربر با موفقیت تغییر کرد.")
+                elif state == "admin_class":
                     parts = text.split("|", 1)
                     if parts[0] == "حذف" and len(parts) == 2:
                         c = await get_class_by_name(s, parts[1])
@@ -748,6 +760,9 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
     u = await ensure_user(update.effective_user.id, update.effective_user.full_name or "")
+    menu_buttons = {x for row in STUDENT_MENU + ASSIGNER_MENU + ADMIN_MENU for x in row}
+    if update.message.text in menu_buttons:
+        context.user_data.clear()
     if not u.active and update.message.text != "/start":
         await update.message.reply_text("جلسه شما بسته است. /start را بزنید.")
         return
