@@ -370,12 +370,12 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data or ""
     if data == "auth:student":
         context.user_data.clear()
-        context.user_data["state"] = "auth_student"
+        context.user_data["state"] = "auth_student_school_code"
         await query.message.reply_text("👨‍🎓 ورود دانش‌آموز\n\nابتدا کد مدرسه را ارسال کنید:")
         return
     if data == "auth:assigner":
         context.user_data.clear()
-        context.user_data["state"] = "auth_assigner"
+        context.user_data["state"] = "auth_assigner_username"
         await query.message.reply_text("👤 ورود تعیین‌کننده\n\nابتدا نام کاربری را ارسال کنید:")
         return
     if not data.startswith("menu:"):
@@ -825,7 +825,7 @@ async def process_state(update, context, u):
             return True
         async with SessionLocal() as s:
             account = (await s.execute(
-                select(User).where(User.login_username == username, User.role == "ASSIGNER", User.active.is_(True))
+                select(User).where(User.login_username == username, User.role == "ASSIGNER")
             )).scalar_one_or_none()
             if not account or not verify_password(password, account.password_hash):
                 await update.message.reply_text("❌ نام کاربری یا رمز عبور نادرست است. دوباره /start را بزنید.")
@@ -835,6 +835,7 @@ async def process_state(update, context, u):
                 await update.message.reply_text("❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
                 return True
             account.telegram_id = update.effective_user.id
+            account.active = True
             await s.commit()
         context.user_data.clear()
         await log_action(account.id, "assigner_login", username)
