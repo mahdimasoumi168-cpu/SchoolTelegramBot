@@ -573,12 +573,26 @@ async def process_state(update, context, u):
         return True
 
     if state == "student_question":
+        question_id = None
         async with SessionLocal() as s:
-            s.add(Question(student_user_id=u.id, text=text))
+            q = Question(student_user_id=u.id, text=text)
+            s.add(q)
             await s.commit()
+            await s.refresh(q)
+            question_id = q.id
         await log_action(u.id, "student_question", text[:200])
+        # Notify administrators and active determiners immediately; the question remains in DB even if Telegram delivery fails.
+        async with SessionLocal() as s:
+            recipients = (await s.execute(
+                select(User).where(User.role.in_(("ADMIN", "ASSIGNER")), User.active.is_(True))
+            )).scalars().all()
+        for recipient in recipients:
+            try:
+                await context.bot.send_message(recipient.telegram_id, f"❓ سؤال جدید #{question_id}\n👨‍🎓 {u.name}\n{text}")
+            except Exception:
+                log.exception("question notification failed for user %s", recipient.id)
         context.user_data.clear()
-        await update.message.reply_text("سؤال شما ثبت شد و برای تعیین‌کننده/مدیریت ارسال می‌شود.", reply_markup=keyboard(STUDENT_MENU))
+        await update.message.reply_text("سؤال شما ثبت شد و برای تعیین‌کننده/مدیریت ارسال شد.", reply_markup=keyboard(STUDENT_MENU))
         return True
 
     if u.role == "ADMIN":
@@ -747,27 +761,45 @@ async def process_state(update, context, u):
                     await create_announcement(context.bot, "تغییر برنامه هفتگی", f"برنامه {sub.name} برای {weekday}، {period} ثبت/به‌روزرسانی شد.", acc.class_id, "announcement", None, u.id)
                     await update.message.reply_text("برنامه ثبت شد و به کلاس اطلاع داده شد.")
                 elif state == "assigner_announcement":
-                    title, body = [x.strip() for x in text.split("|", 1)]
+                    parts = [x.strip() for x in text.split("|", 1)]
+                    if len(parts) != 2 or not parts[0] or not parts[1]:
+                        raise ValueError("فرمت درست: عنوان|متن")
+                    title, body = parts
                     accesses = (await s.execute(select(Access).where(Access.assigner_user_id == u.id))).scalars().all()
-                    class_ids = {a.class_id for a in accesses}
+                    class_ids = sorted({a.class_id for a in accesses})
+                    if not class_ids:
+                        raise ValueError("برای شما هیچ کلاسی تعریف نشده است.")
+                    announcement_ids = []
                     for cid in class_ids:
-                        await s.flush()
-                        a = Announcement(title=title, body=body, class_id=cid, kind="announcement", created_by=u.id)
+                        a = Announcement(title=title, body=body, class_id=cid, kind="announcement", created_by=u.id, sent=False)
                         s.add(a)
+                        await s.flush()
+                        announcement_ids.append((a.id, cid))
                     await s.commit()
-                    ids = (await s.execute(select(Announcement.id).where(Announcement.created_by == u.id).order_by(Announcement.id.desc()).limit(len(class_ids)))).scalars().all()
-                    for aid, cid in zip(ids, class_ids):
+                    for aid, cid in announcement_ids:
                         await notify_class(context.bot, cid, f"📢 {title}\n\n{body}", aid)
                         async with SessionLocal() as ss:
                             x = await ss.get(Announcement, aid)
-                            if x: x.sent=True; await ss.commit()
-                    await update.message.reply_text("اطلاعیه برای کلاس‌های مجاز ارسال شد.")
+                            failed = await ss.scalar(select(Delivery.id).where(Delivery.announcement_id == aid, Delivery.status != "SENT").limit(1))
+                            if x and failed is None:
+                                x.sent = True
+                                await ss.commit()
+                    await update.message.reply_text("اطلاعیه برای کلاس‌های مجاز ثبت و ارسال شد.")
                 elif state == "assigner_tomorrow":
-                    title, body, when = [x.strip() for x in text.split("|", 2)]
+                    parts = [x.strip() for x in text.split("|", 2)]
+                    if len(parts) != 3 or not all(parts):
+                        raise ValueError("فرمت درست: عنوان|متن|YYYY-MM-DD HH:MM")
+                    title, body, when = parts
+                    scheduled_at = parse_dt(when)
+                    if scheduled_at is None:
+                        raise ValueError("زمان‌بندی نمی‌تواند خالی باشد.")
                     accesses = (await s.execute(select(Access).where(Access.assigner_user_id == u.id))).scalars().all()
-                    for cid in {a.class_id for a in accesses}:
-                        s.add(Announcement(title=title, body=body, class_id=cid, kind="tomorrow", scheduled_at=parse_dt(when), created_by=u.id))
-                    await s.commit(); await update.message.reply_text("اطلاعیه فردا زمان‌بندی شد.")
+                    class_ids = sorted({a.class_id for a in accesses})
+                    if not class_ids:
+                        raise ValueError("برای شما هیچ کلاسی تعریف نشده است.")
+                    for cid in class_ids:
+                        s.add(Announcement(title=title, body=body, class_id=cid, kind="tomorrow", scheduled_at=scheduled_at, created_by=u.id))
+                    await s.commit(); await update.message.reply_text("اطلاعیه فردا برای کلاس‌های مجاز زمان‌بندی شد.")
                 elif state == "assigner_answer":
                     qid, answer = [x.strip() for x in text.split("|", 1)]
                     q = await s.get(Question, int(qid))
