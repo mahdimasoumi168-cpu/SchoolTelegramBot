@@ -162,6 +162,7 @@ class Delivery(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
     error: Mapped[str] = mapped_column(Text, default="")
+    __table_args__ = (UniqueConstraint("announcement_id", "user_id", name="uq_delivery_announcement_user"),)
 
 
 STUDENT_MENU = [
@@ -366,8 +367,10 @@ async def show_student(update, u):
 
 async def allowed_subjects(s, u):
     q = await s.execute(
-        select(Subject).join(Access, Access.subject_id == Subject.id, isouter=False)
+        select(Subject).join(Access, Access.subject_id == Subject.id)
         .where(Access.assigner_user_id == u.id)
+        .distinct()
+        .order_by(Subject.name)
     )
     return q.scalars().all()
 
@@ -405,7 +408,13 @@ async def show_assigner(update, context, u):
         await update.message.reply_text("نام درس و عنوان جزوه را با | بفرستید: نام درس|عنوان")
     elif t == "❓ سؤالات":
         async with SessionLocal() as s:
-            q = await s.execute(select(Question, User).join(User, Question.student_user_id == User.id).where(Question.status == "OPEN").order_by(Question.id.desc()).limit(30))
+            allowed_ids = (await s.execute(select(Access.subject_id).where(Access.assigner_user_id == u.id, Access.subject_id.is_not(None)))).scalars().all()
+            q_stmt = select(Question, User).join(User, Question.student_user_id == User.id).where(Question.status == "OPEN")
+            if allowed_ids:
+                q_stmt = q_stmt.where(or_(Question.subject_id.is_(None), Question.subject_id.in_(allowed_ids)))
+            else:
+                q_stmt = q_stmt.where(Question.id == -1)
+            q = await s.execute(q_stmt.order_by(Question.id.desc()).limit(30))
             data = q.all()
             if not data:
                 await update.message.reply_text("سؤال بازی وجود ندارد.")
@@ -507,11 +516,16 @@ async def notify_class(bot, class_id: int | None, text: str, announcement_id: in
             q = q.where(Student.class_id == class_id)
         rows = (await s.execute(q)).all()
         for user, _ in rows:
-            d = Delivery(announcement_id=announcement_id, user_id=user.id, status="PENDING")
-            s.add(d)
+            d = (await s.execute(select(Delivery).where(Delivery.announcement_id == announcement_id, Delivery.user_id == user.id))).scalar_one_or_none()
+            if d and d.status == "SENT":
+                continue
+            if not d:
+                d = Delivery(announcement_id=announcement_id, user_id=user.id, status="PENDING")
+                s.add(d)
             try:
                 await bot.send_message(user.telegram_id, text)
                 d.status = "SENT"
+                d.error = ""
             except Exception as e:
                 d.status = "FAILED"
                 d.error = str(e)[:1000]
@@ -529,7 +543,9 @@ async def create_announcement(bot, title, body, class_id, kind, scheduled_at, cr
         await notify_class(bot, class_id, f"📢 {title}\n\n{body}", aid)
         async with SessionLocal() as s:
             a = await s.get(Announcement, aid)
-            a.sent = True
+            failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == aid, Delivery.status != "SENT").limit(1))
+            if a and failed is None:
+                a.sent = True
             await s.commit()
     return aid
 
@@ -542,7 +558,8 @@ async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
         await notify_class(context.bot, a.class_id, f"🔔 {a.title}\n\n{a.body}", a.id)
         async with SessionLocal() as s:
             x = await s.get(Announcement, a.id)
-            if x:
+            failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == a.id, Delivery.status != "SENT").limit(1))
+            if x and failed is None:
                 x.sent = True
                 await s.commit()
 
@@ -584,13 +601,19 @@ async def process_state(update, context, u):
                     parts = text.split("|", 1)
                     if parts[0] == "حذف" and len(parts) == 2:
                         c = await get_class_by_name(s, parts[1])
-                        if c:
+                        if not c:
+                            await update.message.reply_text("کلاس پیدا نشد.")
+                        else:
+                            student_count = await s.scalar(select(Student.id).where(Student.class_id == c.id).limit(1))
+                            subject_count = await s.scalar(select(Subject.id).where(Subject.class_id == c.id).limit(1))
+                            if student_count is not None or subject_count is not None:
+                                raise ValueError("این کلاس هنوز دانش‌آموز یا درس دارد؛ ابتدا وابستگی‌ها را مدیریت کنید.")
                             await s.delete(c)
                             await s.commit()
                             await update.message.reply_text("کلاس حذف شد.")
-                        else:
-                            await update.message.reply_text("کلاس پیدا نشد.")
                     else:
+                        if not text:
+                            raise ValueError("نام کلاس خالی است.")
                         c = ClassRoom(name=text)
                         s.add(c); await s.commit()
                         await update.message.reply_text("کلاس اضافه شد.")
@@ -617,18 +640,28 @@ async def process_state(update, context, u):
                         target.name, target.role, target.active = name, "ASSIGNER", True
                     await s.commit(); await update.message.reply_text("تعیین‌کننده ثبت شد.")
                 elif state == "admin_subject":
-                    name, clsname, *rest = [x.strip() for x in text.split("|")]
+                    parts = [x.strip() for x in text.split("|")]
+                    if len(parts) < 2 or not parts[0] or not parts[1]:
+                        raise ValueError("فرمت درست: نام درس|نام کلاس|نام تعیین‌کننده اختیاری")
+                    name, clsname, *rest = parts
                     c = await get_class_by_name(s, clsname)
                     if not c: raise ValueError("کلاس وجود ندارد.")
                     sub = Subject(name=name, class_id=c.id, teacher_name=(rest[0] if rest else ""))
                     s.add(sub); await s.commit(); await update.message.reply_text("درس ثبت شد.")
                 elif state == "admin_access":
-                    tid, clsname, subname = [x.strip() for x in text.split("|", 2)]
+                    parts = [x.strip() for x in text.split("|", 2)]
+                    if len(parts) != 3:
+                        raise ValueError("فرمت درست: telegram_id|نام کلاس|نام درس")
+                    tid, clsname, subname = parts
                     au = (await s.execute(select(User).where(User.telegram_id == int(tid), User.role == "ASSIGNER"))).scalar_one_or_none()
                     c = await get_class_by_name(s, clsname)
                     sub = (await s.execute(select(Subject).where(Subject.name == subname, Subject.class_id == c.id))).scalar_one_or_none() if c else None
                     if not au or not c or not sub: raise ValueError("تعیین‌کننده/کلاس/درس پیدا نشد.")
-                    s.add(Access(assigner_user_id=au.id, class_id=c.id, subject_id=sub.id)); await s.commit(); await update.message.reply_text("دسترسی ثبت شد.")
+                    exists = await s.scalar(select(Access.id).where(Access.assigner_user_id == au.id, Access.class_id == c.id, Access.subject_id == sub.id).limit(1))
+                    if exists is not None:
+                        await update.message.reply_text("این دسترسی از قبل وجود دارد.")
+                    else:
+                        s.add(Access(assigner_user_id=au.id, class_id=c.id, subject_id=sub.id)); await s.commit(); await update.message.reply_text("دسترسی ثبت شد.")
                 elif state in ("admin_assignment", "admin_exam"):
                     p = [x.strip() for x in text.split("|", 3)]
                     sub = await get_subject_by_name(s, p[0])
@@ -739,6 +772,11 @@ async def process_state(update, context, u):
                     qid, answer = [x.strip() for x in text.split("|", 1)]
                     q = await s.get(Question, int(qid))
                     if not q: raise ValueError("سؤال پیدا نشد.")
+                    allowed_ids = set((await s.execute(select(Access.subject_id).where(Access.assigner_user_id == u.id, Access.subject_id.is_not(None)))).scalars().all())
+                    if q.subject_id is not None and q.subject_id not in allowed_ids:
+                        raise ValueError("این سؤال مربوط به درس‌های مجاز شما نیست.")
+                    if q.status != "OPEN":
+                        raise ValueError("این سؤال قبلاً پاسخ داده شده است.")
                     q.answer, q.status = answer, "ANSWERED"; await s.commit()
                     student = await s.get(User, q.student_user_id)
                     await context.bot.send_message(student.telegram_id, f"💬 پاسخ سؤال #{qid}:\n{answer}")
