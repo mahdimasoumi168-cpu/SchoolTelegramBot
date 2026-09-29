@@ -695,36 +695,42 @@ async def process_state(update, context, u):
         if not question_text:
             await update.message.reply_text("متن سؤال خالی است. دوباره ارسال کنید یا «انصراف» را بزنید.")
             return True
-        async with SessionLocal() as s:
-            subject_id = None
-            if subject_name:
-                st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
-                if not st or not st.class_id:
-                    raise ValueError("کلاس شما مشخص نیست.")
-                subject = (await s.execute(
-                    select(Subject).where(Subject.name == subject_name, Subject.class_id == st.class_id)
-                )).scalar_one_or_none()
-                if not subject:
-                    raise ValueError("این درس در کلاس شما پیدا نشد.")
-                subject_id = subject.id
-            q = Question(student_user_id=u.id, subject_id=subject_id, text=question_text)
-            s.add(q)
-            await s.commit()
-            await s.refresh(q)
-            question_id = q.id
-        await log_action(u.id, "student_question", question_text[:200])
-        # Notify administrators and active determiners immediately; the question remains in DB even if Telegram delivery fails.
-        async with SessionLocal() as s:
-            recipients = (await s.execute(
-                select(User).where(User.role.in_(("ADMIN", "ASSIGNER")), User.active.is_(True))
-            )).scalars().all()
-        for recipient in recipients:
-            try:
-                await context.bot.send_message(recipient.telegram_id, f"❓ سؤال جدید #{question_id}\n👨‍🎓 {u.name}\n{question_text}")
-            except Exception:
-                log.exception("question notification failed for user %s", recipient.id)
-        context.user_data.clear()
-        await update.message.reply_text("سؤال شما ثبت شد و برای تعیین‌کننده/مدیریت ارسال شد. اگر درس را مشخص کرده باشید، فقط تعیین‌کنندگان مجاز همان درس آن را می‌بینند.", reply_markup=keyboard(STUDENT_MENU))
+        try:
+            async with SessionLocal() as s:
+                subject_id = None
+                if subject_name:
+                    st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+                    if not st or not st.class_id:
+                        raise ValueError("کلاس شما مشخص نیست.")
+                    subject = (await s.execute(
+                        select(Subject).where(Subject.name == subject_name, Subject.class_id == st.class_id)
+                    )).scalar_one_or_none()
+                    if not subject:
+                        raise ValueError("این درس در کلاس شما پیدا نشد.")
+                    subject_id = subject.id
+                q = Question(student_user_id=u.id, subject_id=subject_id, text=question_text)
+                s.add(q)
+                await s.commit()
+                await s.refresh(q)
+                question_id = q.id
+            await log_action(u.id, "student_question", question_text[:200])
+            # Notify administrators and active determiners immediately; the question remains in DB even if Telegram delivery fails.
+            async with SessionLocal() as s:
+                recipients = (await s.execute(
+                    select(User).where(User.role.in_(("ADMIN", "ASSIGNER")), User.active.is_(True))
+                )).scalars().all()
+            for recipient in recipients:
+                try:
+                    await context.bot.send_message(recipient.telegram_id, f"❓ سؤال جدید #{question_id}\n👨‍🎓 {u.name}\n{question_text}")
+                except Exception:
+                    log.exception("question notification failed for user %s", recipient.id)
+            context.user_data.clear()
+            await update.message.reply_text("سؤال شما ثبت شد و برای تعیین‌کننده/مدیریت ارسال شد. اگر درس را مشخص کرده باشید، فقط تعیین‌کنندگان مجاز همان درس آن را می‌بینند.", reply_markup=keyboard(STUDENT_MENU))
+        except ValueError as e:
+            await update.message.reply_text(f"❌ {e}\nدوباره بفرستید یا «انصراف» را بزنید.")
+        except Exception:
+            log.exception("student question flow failed")
+            await update.message.reply_text("❌ ثبت سؤال انجام نشد. وضعیت شما حفظ شد؛ دوباره تلاش کنید.")
         return True
 
     if u.role == "ADMIN":
@@ -865,13 +871,19 @@ async def process_state(update, context, u):
                         raise ValueError("عنوان و متن اطلاعیه الزامی است.")
                     title, body = p[0], p[1]
                     if state == "admin_tomorrow":
+                        if len(p) < 3 or not p[2]:
+                            raise ValueError("زمان‌بندی اطلاعیه فردا الزامی است.")
                         when = parse_dt(p[2])
                         cls = await get_class_by_name(s, p[3]) if len(p)>3 and p[3] else None
+                        if len(p) > 3 and p[3] and not cls:
+                            raise ValueError("کلاس مشخص‌شده پیدا نشد.")
                         cid = cls.id if cls else None
                         kind = "tomorrow"
                     else:
                         when = None
                         cls = await get_class_by_name(s, p[2]) if len(p)>2 and p[2] else None
+                        if len(p) > 2 and p[2] and not cls:
+                            raise ValueError("کلاس مشخص‌شده پیدا نشد.")
                         cid = cls.id if cls else None
                         kind = "announcement"
                 else:
