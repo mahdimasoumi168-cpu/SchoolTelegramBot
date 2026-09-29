@@ -39,7 +39,13 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
 
 TZ = ZoneInfo(TIMEZONE)
-engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
+
+# Keep enough PostgreSQL connections for concurrent Telegram updates without
+# allowing an unbounded connection storm.
+engine_kwargs = {"pool_pre_ping": True}
+if DATABASE_URL.startswith("postgresql+asyncpg://"):
+    engine_kwargs.update(pool_size=10, max_overflow=10, pool_timeout=10)
+engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 # PostgreSQL advisory lock: guarantees that only one bot process can poll
@@ -1055,6 +1061,8 @@ async def process_state(update, context, u):
                         if len(p) < 3 or not p[2]:
                             raise ValueError("زمان‌بندی اطلاعیه فردا الزامی است.")
                         when = parse_dt(p[2])
+                        if when is None:
+                            raise ValueError("زمان‌بندی اطلاعیه فردا نامعتبر است؛ فرمت: YYYY-MM-DD HH:MM")
                         cls = await get_class_by_name(s, p[3]) if len(p)>3 and p[3] else None
                         if len(p) > 3 and p[3] and not cls:
                             raise ValueError("کلاس مشخص‌شده پیدا نشد.")
