@@ -345,10 +345,16 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not u or not u.active or u.role == "PENDING":
         await query.message.reply_text("حساب شما فعال نیست. برای ورود دوباره /start را بزنید.")
         return
-    proxy = callback_update(query, text)
     if text == "🚪 خروج":
-        await logout(proxy, context)
+        await logout(callback_update(query, text), context)
         return
+    # Some student actions need the real CallbackContext; handle them here
+    # instead of relying on the synthetic callback update object.
+    if u.role == "STUDENT" and text == "❓ سؤال":
+        context.user_data["state"] = "student_question"
+        await query.message.reply_text("سؤال خود را بنویسید. برای لغو «انصراف» را بزنید.")
+        return
+    proxy = callback_update(query, text)
     if u.role == "STUDENT":
         await show_student(proxy, u)
     elif u.role == "ASSIGNER":
@@ -444,9 +450,13 @@ async def show_student(update, u):
                 for n, sub in data:
                     await update.message.reply_document(n.file_id, caption=f"📖 {n.title}\n📚 {sub.name}")
     elif update.message.text == "❓ سؤال":
-        context = update._context
+        # The normal message handler already provides the real context.
+        context = getattr(update, "_context", None)
+        if context is None:
+            # Callback flow is handled in menu_callback before reaching here.
+            return
         context.user_data["state"] = "student_question"
-        await update.message.reply_text("سؤال خود را بنویسید. برای لغو «انصراف» را بزنید.")
+        await update.message.reply_text("سؤال خود را بنویسید. برای سؤال درسی، «نام درس|متن سؤال» را بفرستید؛ برای لغو «انصراف».")
     elif update.message.text == "👤 حساب کاربری":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
@@ -678,13 +688,31 @@ async def process_state(update, context, u):
 
     if state == "student_question":
         question_id = None
+        if "|" in text:
+            subject_name, question_text = [x.strip() for x in text.split("|", 1)]
+        else:
+            subject_name, question_text = "", text
+        if not question_text:
+            await update.message.reply_text("متن سؤال خالی است. دوباره ارسال کنید یا «انصراف» را بزنید.")
+            return True
         async with SessionLocal() as s:
-            q = Question(student_user_id=u.id, text=text)
+            subject_id = None
+            if subject_name:
+                st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+                if not st or not st.class_id:
+                    raise ValueError("کلاس شما مشخص نیست.")
+                subject = (await s.execute(
+                    select(Subject).where(Subject.name == subject_name, Subject.class_id == st.class_id)
+                )).scalar_one_or_none()
+                if not subject:
+                    raise ValueError("این درس در کلاس شما پیدا نشد.")
+                subject_id = subject.id
+            q = Question(student_user_id=u.id, subject_id=subject_id, text=question_text)
             s.add(q)
             await s.commit()
             await s.refresh(q)
             question_id = q.id
-        await log_action(u.id, "student_question", text[:200])
+        await log_action(u.id, "student_question", question_text[:200])
         # Notify administrators and active determiners immediately; the question remains in DB even if Telegram delivery fails.
         async with SessionLocal() as s:
             recipients = (await s.execute(
@@ -692,11 +720,11 @@ async def process_state(update, context, u):
             )).scalars().all()
         for recipient in recipients:
             try:
-                await context.bot.send_message(recipient.telegram_id, f"❓ سؤال جدید #{question_id}\n👨‍🎓 {u.name}\n{text}")
+                await context.bot.send_message(recipient.telegram_id, f"❓ سؤال جدید #{question_id}\n👨‍🎓 {u.name}\n{question_text}")
             except Exception:
                 log.exception("question notification failed for user %s", recipient.id)
         context.user_data.clear()
-        await update.message.reply_text("سؤال شما ثبت شد و برای تعیین‌کننده/مدیریت ارسال شد.", reply_markup=keyboard(STUDENT_MENU))
+        await update.message.reply_text("سؤال شما ثبت شد و برای تعیین‌کننده/مدیریت ارسال شد. اگر درس را مشخص کرده باشید، فقط تعیین‌کنندگان مجاز همان درس آن را می‌بینند.", reply_markup=keyboard(STUDENT_MENU))
         return True
 
     if u.role == "ADMIN":
