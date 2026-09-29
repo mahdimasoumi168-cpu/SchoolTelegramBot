@@ -717,6 +717,61 @@ async def process_state(update, context, u):
         await panel(update, "عملیات لغو شد.")
         return True
 
+    if state == "auth_student":
+        parts = [x.strip() for x in text.split("|", 1)]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            await update.message.reply_text("فرمت ورود درست نیست.\nکد مدرسه|نام و نام خانوادگی")
+            return True
+        code, name = parts
+        async with SessionLocal() as s:
+            q = await s.execute(
+                select(Student, User).join(User, Student.user_id == User.id).where(
+                    Student.school_code == code,
+                    Student.login_name == norm_name(name),
+                    User.role == "STUDENT"
+                )
+            )
+            rows = q.all()
+            if len(rows) != 1:
+                await update.message.reply_text("❌ اطلاعات ورود پیدا نشد. کد مدرسه و نام را دقیقاً مطابق اطلاعات ثبت‌شده توسط مدیریت وارد کنید.")
+                return True
+            st, account = rows[0]
+            if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
+                await update.message.reply_text("❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
+                return True
+            account.telegram_id = update.effective_user.id
+            account.active = True
+            account.name = st.login_name
+            await s.commit()
+        context.user_data.clear()
+        await log_action(account.id, "student_login", code)
+        await panel(update, f"سلام {account.name} 👋\nورود با موفقیت انجام شد.\n🏫 کد مدرسه: {code}")
+        return True
+
+    if state == "auth_assigner":
+        parts = [x.strip() for x in text.split("|", 1)]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            await update.message.reply_text("فرمت ورود درست نیست.\nنام کاربری|رمز عبور")
+            return True
+        username, password = parts
+        async with SessionLocal() as s:
+            account = (await s.execute(
+                select(User).where(User.login_username == username, User.role == "ASSIGNER", User.active.is_(True))
+            )).scalar_one_or_none()
+            if not account or not verify_password(password, account.password_hash):
+                await update.message.reply_text("❌ نام کاربری یا رمز عبور نادرست است.")
+                return True
+            if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
+                await update.message.reply_text("❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
+                return True
+            account.telegram_id = update.effective_user.id
+            await s.commit()
+        context.user_data.clear()
+        await log_action(account.id, "assigner_login", username)
+        await panel(update, f"سلام {account.name} 👋\nورود با موفقیت انجام شد.")
+        return True
+
+
     if state == "student_question":
         question_id = None
         if "|" in text:
@@ -813,40 +868,50 @@ async def process_state(update, context, u):
                         s.add(c); await s.commit()
                         await update.message.reply_text("کلاس اضافه شد.")
                 elif state == "admin_student":
-                    tid, name, clsname = [x.strip() for x in text.split("|", 2)]
-                    tid = int(tid)
-                    target = (await s.execute(select(User).where(User.telegram_id == tid))).scalar_one_or_none()
-                    if not target:
-                        target = User(telegram_id=tid, name=name, role="STUDENT", active=True); s.add(target); await s.flush()
-                    target.name, target.role = name, "STUDENT"
+                    parts = [x.strip() for x in text.split("|", 2)]
+                    if len(parts) != 3 or not all(parts):
+                        raise ValueError("فرمت درست: کد مدرسه|نام دانش‌آموز|نام کلاس")
+                    school_code, name, clsname = parts
                     c = await get_class_by_name(s, clsname)
-                    if not c: raise ValueError("کلاس وجود ندارد.")
-                    st = (await s.execute(select(Student).where(Student.user_id == target.id))).scalar_one_or_none()
-                    if not st: s.add(Student(user_id=target.id, class_id=c.id))
-                    else: st.class_id = c.id
-                    target.active = True
-                    await s.commit()
-                    try:
-                        await context.bot.send_message(target.telegram_id, f"✅ حساب شما به‌عنوان دانش‌آموز فعال شد.\\n🏫 کلاس: {c.name}\\nبرای ورود /start را بزنید.")
-                    except Exception:
-                        log.exception("student role notification failed")
-                    await log_action(u.id, "student_assigned", f"{tid}|{c.name}")
-                    await update.message.reply_text("دانش‌آموز ثبت/به‌روزرسانی شد.")
-                elif state == "admin_assigner":
-                    tid, name = [x.strip() for x in text.split("|", 1)]
-                    tid = int(tid)
-                    target = (await s.execute(select(User).where(User.telegram_id == tid))).scalar_one_or_none()
-                    if not target:
-                        target = User(telegram_id=tid, name=name, role="ASSIGNER", active=True); s.add(target)
+                    if not c:
+                        raise ValueError("کلاس وجود ندارد.")
+                    existing = (await s.execute(
+                        select(Student, User).join(User, Student.user_id == User.id).where(
+                            Student.school_code == school_code,
+                            Student.login_name == norm_name(name)
+                        )
+                    )).first()
+                    if existing:
+                        st, target = existing
+                        target.name, target.role, target.active = name, "STUDENT", True
+                        st.class_id, st.school_code, st.login_name = c.id, school_code, norm_name(name)
                     else:
-                        target.name, target.role, target.active = name, "ASSIGNER", True
+                        target = User(telegram_id=None, name=name, role="STUDENT", active=True)
+                        s.add(target)
+                        await s.flush()
+                        s.add(Student(user_id=target.id, class_id=c.id, school_code=school_code, login_name=norm_name(name)))
                     await s.commit()
-                    try:
-                        await context.bot.send_message(target.telegram_id, "✅ حساب شما به‌عنوان تعیین‌کننده فعال شد.\\nبرای ورود /start را بزنید.")
-                    except Exception:
-                        log.exception("assigner role notification failed")
-                    await log_action(u.id, "assigner_assigned", str(tid))
-                    await update.message.reply_text("تعیین‌کننده ثبت شد.")
+                    await log_action(u.id, "student_provisioned", f"{school_code}|{name}|{c.name}")
+                    await update.message.reply_text("✅ حساب دانش‌آموز از قبل ثبت شد.\nدانش‌آموز فقط با «کد مدرسه + نام» وارد می‌شود.")
+                elif state == "admin_assigner":
+                    parts = [x.strip() for x in text.split("|", 2)]
+                    if len(parts) != 3 or not all(parts):
+                        raise ValueError("فرمت درست: نام کاربری|رمز عبور|نام تعیین‌کننده")
+                    username, password, name = parts
+                    if len(password) < 6:
+                        raise ValueError("رمز عبور باید حداقل ۶ کاراکتر باشد.")
+                    existing = (await s.execute(select(User).where(User.login_username == username))).scalar_one_or_none()
+                    if existing:
+                        if existing.role != "ASSIGNER":
+                            raise ValueError("این نام کاربری قبلاً برای نقش دیگری ثبت شده است.")
+                        existing.name, existing.password_hash, existing.active = name, hash_password(password), True
+                        target = existing
+                    else:
+                        target = User(telegram_id=None, name=name, role="ASSIGNER", active=True, login_username=username, password_hash=hash_password(password))
+                        s.add(target)
+                    await s.commit()
+                    await log_action(u.id, "assigner_provisioned", username)
+                    await update.message.reply_text("✅ حساب تعیین‌کننده ثبت شد.\nورود فقط با «نام کاربری + رمز عبور» انجام می‌شود.")
                 elif state == "admin_subject":
                     parts = [x.strip() for x in text.split("|")]
                     if len(parts) < 2 or not parts[0] or not parts[1]:
