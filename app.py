@@ -1195,13 +1195,17 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     menu_buttons = {x for row in STUDENT_MENU + ASSIGNER_MENU + ADMIN_MENU for x in row}
     if update.message.text in menu_buttons:
         context.user_data.clear()
-    if not u.active and update.message.text != "/start":
-        await update.message.reply_text("جلسه شما بسته است. /start را بزنید.")
+    # Authentication messages must be processed before checking an existing DB user.
+    if await process_state(update, context, u):
+        return
+    if not u:
+        await update.message.reply_text("برای ورود ابتدا /start را بزنید.")
+        return
+    if not u.active:
+        await update.message.reply_text("جلسه شما بسته است. برای ورود دوباره /start را بزنید.")
         return
     if update.message.text == "🚪 خروج":
         await logout(update, context); return
-    if await process_state(update, context, u):
-        return
     if u.role == "STUDENT":
         await show_student(update, u)
     elif u.role == "ASSIGNER":
