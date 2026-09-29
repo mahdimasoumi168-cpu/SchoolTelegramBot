@@ -527,16 +527,16 @@ async def show_assigner(update, context, u):
             await update.message.reply_text("📚 درس‌های در دسترس:\n" + ("\n".join(f"• {x.id}: {x.name}" for x in subs) or "درسی در دسترس نیست."))
     elif t == "📝 تکالیف":
         context.user_data["state"] = "assigner_assignment"
-        await update.message.reply_text("فرمت تکلیف:\nنام درس|عنوان|متن|YYYY-MM-DD HH:MM\nبرای بدون مهلت، بخش آخر را خالی بگذارید.")
+        await update.message.reply_text("مدیریت تکالیف:\nافزودن|نام درس|عنوان|متن|YYYY-MM-DD HH:MM\nویرایش|شناسه|نام درس|عنوان|متن|YYYY-MM-DD HH:MM\nحذف|شناسه")
     elif t == "📢 ارسال اطلاعیه":
         context.user_data["state"] = "assigner_announcement"
         await update.message.reply_text("فرمت اطلاعیه:\nعنوان|متن\nبرای همه کلاس‌های مجاز ارسال می‌شود.")
     elif t == "📅 برنامه هفتگی":
         context.user_data["state"] = "assigner_schedule"
-        await update.message.reply_text("فرمت برنامه:\nنام درس|روز|ساعت/زنگ")
+        await update.message.reply_text("مدیریت برنامه:\nافزودن|نام درس|روز|ساعت/زنگ\nویرایش|شناسه|نام درس|روز|ساعت/زنگ\nحذف|شناسه")
     elif t == "📝 امتحانات":
         context.user_data["state"] = "assigner_exam"
-        await update.message.reply_text("فرمت امتحان:\nنام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات")
+        await update.message.reply_text("مدیریت امتحانات:\nافزودن|نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات\nویرایش|شناسه|نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات\nحذف|شناسه")
     elif t == "📖 جزوات":
         context.user_data["state"] = "assigner_note_title"
         await update.message.reply_text("مدیریت جزوات:\\nافزودن|نام درس|عنوان سپس فایل را ارسال کنید\\nحذف|شناسه جزوه")
@@ -1019,6 +1019,35 @@ async def process_state(update, context, u):
         context.user_data.clear()
         return True
 
+    if u.role == "ADMIN" and state == "admin_note_manage":
+        parts=[x.strip() for x in text.split("|",1)]
+        if len(parts)!=2:
+            await update.message.reply_text("فرمت: افزودن|نام درس|عنوان یا حذف|شناسه جزوه")
+            return True
+        action,value=parts
+        if action=="افزودن":
+            meta=[x.strip() for x in value.split("|",1)]
+            if len(meta)!=2 or not all(meta):
+                await update.message.reply_text("فرمت افزودن: افزودن|نام درس|عنوان")
+                return True
+            context.user_data["note_meta"]=meta
+            context.user_data["state"]="admin_note_file"
+            await update.message.reply_text("حالا فایل جزوه را ارسال کنید.")
+            return True
+        if action=="حذف":
+            async with SessionLocal() as s:
+                n=await s.get(Note,int(value))
+                if not n:
+                    await update.message.reply_text("جزوه پیدا نشد.")
+                    return True
+                await s.delete(n)
+                await s.commit()
+            context.user_data.clear()
+            await update.message.reply_text("✅ جزوه حذف شد.")
+            return True
+        await update.message.reply_text("عملیات نامعتبر است.")
+        return True
+
     if u.role == "ADMIN" and state == "admin_note_title":
         meta = [x.strip() for x in text.split("|", 1)]
         if len(meta) != 2:
@@ -1034,35 +1063,60 @@ async def process_state(update, context, u):
             async with SessionLocal() as s:
                 subs = await allowed_subjects(s, u)
                 if state == "assigner_assignment":
-                    p = [x.strip() for x in text.split("|", 3)]
-                    if len(p) < 3 or not p[0] or not p[1] or not p[2]:
-                        raise ValueError("فرمت درست: نام درس|عنوان|متن|YYYY-MM-DD HH:MM")
-                    sub = next((x for x in subs if x.name == p[0]), None)
-                    if not sub: raise ValueError("این درس برای شما مجاز نیست.")
-                    a = Assignment(subject_id=sub.id, title=p[1], body=p[2], due_at=parse_dt(p[3]) if len(p)>3 else None, created_by=u.id); s.add(a); await s.commit()
-                    await create_announcement(context.bot, f"تکلیف جدید: {p[1]}", p[2], sub.class_id, "announcement", None, u.id)
-                    await update.message.reply_text("تکلیف ثبت شد و به کلاس اطلاع داده شد.")
+                    p=[x.strip() for x in text.split("|")]
+                    if p[0]=="افزودن" and len(p)>=4:
+                        sub=next((x for x in subs if x.name==p[1]),None)
+                        if not sub: raise ValueError("این درس برای شما مجاز نیست.")
+                        a=Assignment(subject_id=sub.id,title=p[2],body=p[3],due_at=parse_dt(p[4]) if len(p)>4 else None,created_by=u.id); s.add(a); await s.commit(); await create_announcement(context.bot,"تکلیف جدید: "+p[2],p[3],sub.class_id,"announcement",None,u.id); await update.message.reply_text("✅ تکلیف ثبت شد و اطلاع‌رسانی شد.")
+                    elif p[0]=="ویرایش" and len(p)>=6:
+                        a=await s.get(Assignment,int(p[1])); sub=next((x for x in subs if x.name==p[2]),None)
+                        if not a or not sub: raise ValueError("تکلیف یا درس پیدا نشد.")
+                        if a.subject_id not in {x.id for x in subs}: raise ValueError("به این تکلیف دسترسی ندارید.")
+                        a.subject_id,a.title,a.body,a.due_at=sub.id,p[3],p[4],parse_dt(p[5]); await s.commit(); await update.message.reply_text("✅ تکلیف ویرایش شد.")
+                    elif p[0]=="حذف" and len(p)==2:
+                        a=await s.get(Assignment,int(p[1]))
+                        if not a or a.subject_id not in {x.id for x in subs}: raise ValueError("تکلیف پیدا نشد یا دسترسی ندارید.")
+                        await s.delete(a); await s.commit(); await update.message.reply_text("✅ تکلیف حذف شد.")
+                    else: raise ValueError("فرمت تکلیف درست نیست.")
                 elif state == "assigner_exam":
-                    p = [x.strip() for x in text.split("|", 3)]
-                    if len(p) < 3 or not p[0] or not p[1] or not p[2]:
-                        raise ValueError("فرمت درست: نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات")
-                    sub = next((x for x in subs if x.name == p[0]), None)
-                    if not sub: raise ValueError("این درس برای شما مجاز نیست.")
-                    e = Exam(subject_id=sub.id, title=p[1], exam_at=parse_dt(p[2]), details=p[3] if len(p)>3 else "", created_by=u.id); s.add(e); await s.commit()
-                    await create_announcement(context.bot, f"امتحان جدید: {p[1]}", p[3] if len(p)>3 else "", sub.class_id, "announcement", None, u.id)
-                    await update.message.reply_text("امتحان ثبت شد و به کلاس اطلاع داده شد.")
+                    p=[x.strip() for x in text.split("|")]
+                    if p[0]=="افزودن" and len(p)>=4:
+                        sub=next((x for x in subs if x.name==p[1]),None)
+                        if not sub: raise ValueError("این درس برای شما مجاز نیست.")
+                        dt=parse_dt(p[3])
+                        if not dt: raise ValueError("تاریخ امتحان الزامی است.")
+                        s.add(Exam(subject_id=sub.id,title=p[2],exam_at=dt,details=p[4] if len(p)>4 else "",created_by=u.id)); await s.commit(); await create_announcement(context.bot,"امتحان جدید: "+p[2],p[4] if len(p)>4 else "",sub.class_id,"announcement",None,u.id); await update.message.reply_text("✅ امتحان ثبت شد و اطلاع‌رسانی شد.")
+                    elif p[0]=="ویرایش" and len(p)>=6:
+                        e=await s.get(Exam,int(p[1])); sub=next((x for x in subs if x.name==p[2]),None)
+                        if not e or not sub: raise ValueError("امتحان یا درس پیدا نشد.")
+                        if e.subject_id not in {x.id for x in subs}: raise ValueError("به این امتحان دسترسی ندارید.")
+                        e.subject_id,e.title,e.exam_at,e.details=sub.id,p[3],parse_dt(p[4]),p[5]; await s.commit(); await update.message.reply_text("✅ امتحان ویرایش شد.")
+                    elif p[0]=="حذف" and len(p)==2:
+                        e=await s.get(Exam,int(p[1]))
+                        if not e or e.subject_id not in {x.id for x in subs}: raise ValueError("امتحان پیدا نشد یا دسترسی ندارید.")
+                        await s.delete(e); await s.commit(); await update.message.reply_text("✅ امتحان حذف شد.")
+                    else: raise ValueError("فرمت امتحان درست نیست.")
                 elif state == "assigner_schedule":
-                    parts = [x.strip() for x in text.split("|", 2)]
-                    if len(parts) != 3 or not all(parts):
-                        raise ValueError("فرمت درست: نام درس|روز|ساعت/زنگ")
-                    subname, weekday, period = parts
-                    sub = next((x for x in subs if x.name == subname), None)
-                    if not sub: raise ValueError("این درس برای شما مجاز نیست.")
-                    acc = (await s.execute(select(Access).where(Access.assigner_user_id == u.id, Access.subject_id == sub.id))).scalars().first()
-                    if not acc: raise ValueError("دسترسی کلاس پیدا نشد.")
-                    s.add(Schedule(class_id=acc.class_id, subject_id=sub.id, weekday=weekday, period=period)); await s.commit()
-                    await create_announcement(context.bot, "تغییر برنامه هفتگی", f"برنامه {sub.name} برای {weekday}، {period} ثبت/به‌روزرسانی شد.", acc.class_id, "announcement", None, u.id)
-                    await update.message.reply_text("برنامه ثبت شد و به کلاس اطلاع داده شد.")
+                    p=[x.strip() for x in text.split("|")]
+                    if p[0]=="افزودن" and len(p)==4:
+                        sub=next((x for x in subs if x.name==p[1]),None)
+                        if not sub: raise ValueError("این درس برای شما مجاز نیست.")
+                        acc=(await s.execute(select(Access).where(Access.assigner_user_id==u.id,Access.subject_id==sub.id))).scalars().first()
+                        if not acc: raise ValueError("دسترسی کلاس پیدا نشد.")
+                        s.add(Schedule(class_id=acc.class_id,subject_id=sub.id,weekday=p[2],period=p[3])); await s.commit(); await create_announcement(context.bot,"تغییر برنامه هفتگی",f"{sub.name} - {p[2]} - {p[3]}",acc.class_id,"announcement",None,u.id); await update.message.reply_text("✅ برنامه ثبت شد و اطلاع‌رسانی شد.")
+                    elif p[0]=="ویرایش" and len(p)==5:
+                        sch=await s.get(Schedule,int(p[1])); sub=next((x for x in subs if x.name==p[2]),None)
+                        if not sch or not sub: raise ValueError("برنامه یا درس پیدا نشد.")
+                        if sch.subject_id not in {x.id for x in subs}: raise ValueError("به این برنامه دسترسی ندارید.")
+                        acc=(await s.execute(select(Access).where(Access.assigner_user_id==u.id,Access.subject_id==sub.id))).scalars().first()
+                        if not acc or sch.class_id!=acc.class_id: raise ValueError("به این برنامه دسترسی ندارید.")
+                        sch.subject_id,sch.weekday,sch.period=sub.id,p[3],p[4]; await s.commit(); await update.message.reply_text("✅ برنامه ویرایش شد.")
+                    elif p[0]=="حذف" and len(p)==2:
+                        sch=await s.get(Schedule,int(p[1]))
+                        if not sch: raise ValueError("برنامه پیدا نشد.")
+                        if not await s.scalar(select(Access.id).where(Access.assigner_user_id==u.id,Access.class_id==sch.class_id,Access.subject_id==sch.subject_id).limit(1)): raise ValueError("به این برنامه دسترسی ندارید.")
+                        await s.delete(sch); await s.commit(); await update.message.reply_text("✅ برنامه حذف شد.")
+                    else: raise ValueError("فرمت برنامه درست نیست.")
                 elif state == "assigner_announcement":
                     parts = [x.strip() for x in text.split("|", 1)]
                     if len(parts) != 2 or not parts[0] or not parts[1]:
