@@ -620,8 +620,11 @@ async def process_state(update, context, u):
                         else:
                             student_count = await s.scalar(select(Student.id).where(Student.class_id == c.id).limit(1))
                             subject_count = await s.scalar(select(Subject.id).where(Subject.class_id == c.id).limit(1))
-                            if student_count is not None or subject_count is not None:
-                                raise ValueError("این کلاس هنوز دانش‌آموز یا درس دارد؛ ابتدا وابستگی‌ها را مدیریت کنید.")
+                            access_count = await s.scalar(select(Access.id).where(Access.class_id == c.id).limit(1))
+                            schedule_count = await s.scalar(select(Schedule.id).where(Schedule.class_id == c.id).limit(1))
+                            announcement_count = await s.scalar(select(Announcement.id).where(Announcement.class_id == c.id).limit(1))
+                            if any(x is not None for x in (student_count, subject_count, access_count, schedule_count, announcement_count)):
+                                raise ValueError("این کلاس هنوز وابستگی دارد؛ ابتدا وابستگی‌های آن را مدیریت کنید.")
                             await s.delete(c)
                             await s.commit()
                             await update.message.reply_text("کلاس حذف شد.")
@@ -678,6 +681,8 @@ async def process_state(update, context, u):
                         s.add(Access(assigner_user_id=au.id, class_id=c.id, subject_id=sub.id)); await s.commit(); await update.message.reply_text("دسترسی ثبت شد.")
                 elif state in ("admin_assignment", "admin_exam"):
                     p = [x.strip() for x in text.split("|", 3)]
+                    if len(p) < 3 or not p[0] or not p[1] or not p[2]:
+                        raise ValueError("فرمت ناقص است. اطلاعات را با | جدا کنید.")
                     sub = await get_subject_by_name(s, p[0])
                     if not sub: raise ValueError("درس پیدا نشد.")
                     if state == "admin_assignment":
@@ -691,7 +696,10 @@ async def process_state(update, context, u):
                         await create_announcement(context.bot, f"امتحان جدید: {p[1]}", p[3] if len(p)>3 else "", sub.class_id, "announcement", None, u.id)
                         await update.message.reply_text("امتحان ثبت شد و اطلاع‌رسانی انجام شد.")
                 elif state == "admin_schedule":
-                    clsname, subname, weekday, period = [x.strip() for x in text.split("|", 3)]
+                    parts = [x.strip() for x in text.split("|", 3)]
+                    if len(parts) != 4 or not all(parts):
+                        raise ValueError("فرمت درست: نام کلاس|نام درس|روز|زنگ")
+                    clsname, subname, weekday, period = parts
                     c = await get_class_by_name(s, clsname); sub = await get_subject_by_name(s, subname)
                     if not c or not sub: raise ValueError("کلاس یا درس پیدا نشد.")
                     s.add(Schedule(class_id=c.id, subject_id=sub.id, weekday=weekday, period=period)); await s.commit()
@@ -699,6 +707,8 @@ async def process_state(update, context, u):
                     await update.message.reply_text("برنامه ثبت شد و اطلاع‌رسانی انجام شد.")
                 elif state in ("admin_announcement", "admin_tomorrow"):
                     p = [x.strip() for x in text.split("|", 3)]
+                    if len(p) < 2 or not p[0] or not p[1]:
+                        raise ValueError("عنوان و متن اطلاعیه الزامی است.")
                     title, body = p[0], p[1]
                     if state == "admin_tomorrow":
                         when = parse_dt(p[2])
@@ -739,6 +749,8 @@ async def process_state(update, context, u):
                 subs = await allowed_subjects(s, u)
                 if state == "assigner_assignment":
                     p = [x.strip() for x in text.split("|", 3)]
+                    if len(p) < 3 or not p[0] or not p[1] or not p[2]:
+                        raise ValueError("فرمت درست: نام درس|عنوان|متن|YYYY-MM-DD HH:MM")
                     sub = next((x for x in subs if x.name == p[0]), None)
                     if not sub: raise ValueError("این درس برای شما مجاز نیست.")
                     a = Assignment(subject_id=sub.id, title=p[1], body=p[2], due_at=parse_dt(p[3]) if len(p)>3 else None, created_by=u.id); s.add(a); await s.commit()
@@ -746,13 +758,18 @@ async def process_state(update, context, u):
                     await update.message.reply_text("تکلیف ثبت شد و به کلاس اطلاع داده شد.")
                 elif state == "assigner_exam":
                     p = [x.strip() for x in text.split("|", 3)]
+                    if len(p) < 3 or not p[0] or not p[1] or not p[2]:
+                        raise ValueError("فرمت درست: نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات")
                     sub = next((x for x in subs if x.name == p[0]), None)
                     if not sub: raise ValueError("این درس برای شما مجاز نیست.")
                     e = Exam(subject_id=sub.id, title=p[1], exam_at=parse_dt(p[2]), details=p[3] if len(p)>3 else "", created_by=u.id); s.add(e); await s.commit()
                     await create_announcement(context.bot, f"امتحان جدید: {p[1]}", p[3] if len(p)>3 else "", sub.class_id, "announcement", None, u.id)
                     await update.message.reply_text("امتحان ثبت شد و به کلاس اطلاع داده شد.")
                 elif state == "assigner_schedule":
-                    subname, weekday, period = [x.strip() for x in text.split("|", 2)]
+                    parts = [x.strip() for x in text.split("|", 2)]
+                    if len(parts) != 3 or not all(parts):
+                        raise ValueError("فرمت درست: نام درس|روز|ساعت/زنگ")
+                    subname, weekday, period = parts
                     sub = next((x for x in subs if x.name == subname), None)
                     if not sub: raise ValueError("این درس برای شما مجاز نیست.")
                     acc = (await s.execute(select(Access).where(Access.assigner_user_id == u.id, Access.subject_id == sub.id))).scalars().first()
@@ -801,7 +818,10 @@ async def process_state(update, context, u):
                         s.add(Announcement(title=title, body=body, class_id=cid, kind="tomorrow", scheduled_at=scheduled_at, created_by=u.id))
                     await s.commit(); await update.message.reply_text("اطلاعیه فردا برای کلاس‌های مجاز زمان‌بندی شد.")
                 elif state == "assigner_answer":
-                    qid, answer = [x.strip() for x in text.split("|", 1)]
+                    parts = [x.strip() for x in text.split("|", 1)]
+                    if len(parts) != 2 or not parts[0] or not parts[1]:
+                        raise ValueError("فرمت درست: شماره سؤال|متن پاسخ")
+                    qid, answer = parts
                     q = await s.get(Question, int(qid))
                     if not q: raise ValueError("سؤال پیدا نشد.")
                     allowed_ids = set((await s.execute(select(Access.subject_id).where(Access.assigner_user_id == u.id, Access.subject_id.is_not(None)))).scalars().all())
