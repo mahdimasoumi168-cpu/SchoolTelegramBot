@@ -1,0 +1,5 @@
+python-telegram-bot[job-queue]==22.5
+SQLAlchemy==2.0.43
+asyncpg==0.30.0
+greenlet==3.2.4
+python-dotenv==1.1.1
