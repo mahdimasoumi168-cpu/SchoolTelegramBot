@@ -857,50 +857,50 @@ async def process_state(update, context, u):
                         await s.delete(c0); await s.commit(); await update.message.reply_text("✅ کلاس حذف شد.")
                     else: raise ValueError("فرمت: افزودن|نام کلاس / ویرایش|نام قبلی|نام جدید / حذف|نام کلاس")
                 elif state == "admin_student":
-                    parts = [x.strip() for x in text.split("|", 2)]
-                    if len(parts) != 3 or not all(parts):
-                        raise ValueError("فرمت درست: کد مدرسه|نام دانش‌آموز|نام کلاس")
-                    school_code, name, clsname = parts
-                    c = await get_class_by_name(s, clsname)
-                    if not c:
-                        raise ValueError("کلاس وجود ندارد.")
-                    existing = (await s.execute(
-                        select(Student, User).join(User, Student.user_id == User.id).where(
-                            Student.school_code == school_code,
-                            Student.login_name == norm_name(name)
-                        )
-                    )).first()
-                    if existing:
-                        st, target = existing
-                        target.name, target.role, target.active = name, "STUDENT", True
-                        st.class_id, st.school_code, st.login_name = c.id, school_code, norm_name(name)
-                    else:
-                        target = User(telegram_id=None, name=name, role="STUDENT", active=True)
-                        s.add(target)
-                        await s.flush()
-                        s.add(Student(user_id=target.id, class_id=c.id, school_code=school_code, login_name=norm_name(name)))
-                    await s.commit()
-                    await log_action(u.id, "student_provisioned", f"{school_code}|{name}|{c.name}")
-                    await update.message.reply_text("✅ حساب دانش‌آموز از قبل ثبت شد.\nدانش‌آموز فقط با «کد مدرسه + نام» وارد می‌شود.")
+                    p=[x.strip() for x in text.split("|")]
+                    if p[0]=="افزودن" and len(p)==4:
+                        school_code,name,clsname=p[1:]
+                        c0=await get_class_by_name(s,clsname)
+                        if not c0: raise ValueError("کلاس وجود ندارد.")
+                        exists=await s.scalar(select(Student.id).where(Student.school_code==school_code,Student.login_name==norm_name(name)).limit(1))
+                        if exists: raise ValueError("این دانش‌آموز قبلاً ثبت شده است.")
+                        target=User(telegram_id=None,name=name,role="STUDENT",active=True); s.add(target); await s.flush()
+                        s.add(Student(user_id=target.id,class_id=c0.id,school_code=school_code,login_name=norm_name(name))); await s.commit()
+                        await log_action(u.id,"student_provisioned",f"{school_code}|{name}|{c0.name}"); await update.message.reply_text("✅ حساب دانش‌آموز ثبت شد.")
+                    elif p[0]=="ویرایش" and len(p)==5:
+                        st=await s.get(Student,int(p[1])); c0=await get_class_by_name(s,p[4])
+                        if not st or not c0: raise ValueError("دانش‌آموز یا کلاس پیدا نشد.")
+                        st.school_code,st.login_name,st.class_id=p[2],norm_name(p[3]),c0.id
+                        target=await s.get(User,st.user_id); target.name=p[3]; target.active=True
+                        await s.commit(); await update.message.reply_text("✅ اطلاعات دانش‌آموز ویرایش شد.")
+                    elif p[0]=="حذف" and len(p)==2:
+                        st=await s.get(Student,int(p[1]))
+                        if not st: raise ValueError("دانش‌آموز پیدا نشد.")
+                        target=await s.get(User,st.user_id); await s.delete(st)
+                        if target: target.role,target.active,target.telegram_id="PENDING",False,None
+                        await s.commit(); await update.message.reply_text("✅ دانش‌آموز حذف و حساب او غیرفعال شد.")
+                    else: raise ValueError("فرمت: افزودن|کد مدرسه|نام|کلاس / ویرایش|شناسه|کد|نام|کلاس / حذف|شناسه")
                 elif state == "admin_assigner":
-                    parts = [x.strip() for x in text.split("|", 2)]
-                    if len(parts) != 3 or not all(parts):
-                        raise ValueError("فرمت درست: نام کاربری|رمز عبور|نام تعیین‌کننده")
-                    username, password, name = parts
-                    if len(password) < 6:
-                        raise ValueError("رمز عبور باید حداقل ۶ کاراکتر باشد.")
-                    existing = (await s.execute(select(User).where(User.login_username == username))).scalar_one_or_none()
-                    if existing:
-                        if existing.role != "ASSIGNER":
-                            raise ValueError("این نام کاربری قبلاً برای نقش دیگری ثبت شده است.")
-                        existing.name, existing.password_hash, existing.active = name, hash_password(password), True
-                        target = existing
-                    else:
-                        target = User(telegram_id=None, name=name, role="ASSIGNER", active=True, login_username=username, password_hash=hash_password(password))
-                        s.add(target)
-                    await s.commit()
-                    await log_action(u.id, "assigner_provisioned", username)
-                    await update.message.reply_text("✅ حساب تعیین‌کننده ثبت شد.\nورود فقط با «نام کاربری + رمز عبور» انجام می‌شود.")
+                    p=[x.strip() for x in text.split("|")]
+                    if p[0]=="افزودن" and len(p)==4:
+                        username,password,name=p[1:]
+                        if len(password)<6: raise ValueError("رمز عبور باید حداقل ۶ کاراکتر باشد.")
+                        if await s.scalar(select(User.id).where(User.login_username==username).limit(1)): raise ValueError("نام کاربری تکراری است.")
+                        target=User(telegram_id=None,name=name,role="ASSIGNER",active=True,login_username=username,password_hash=hash_password(password)); s.add(target); await s.commit(); await log_action(u.id,"assigner_provisioned",username); await update.message.reply_text("✅ تعیین‌کننده ثبت شد.")
+                    elif p[0]=="ویرایش" and len(p)==5:
+                        target=await s.get(User,int(p[1]))
+                        if not target or target.role!="ASSIGNER": raise ValueError("تعیین‌کننده پیدا نشد.")
+                        if len(p[3])<6: raise ValueError("رمز عبور باید حداقل ۶ کاراکتر باشد.")
+                        duplicate=await s.scalar(select(User.id).where(User.login_username==p[2],User.id!=target.id).limit(1))
+                        if duplicate: raise ValueError("نام کاربری جدید تکراری است.")
+                        target.login_username,target.password_hash,target.name,target.active=p[2],hash_password(p[3]),p[4],True
+                        await s.commit(); await update.message.reply_text("✅ تعیین‌کننده ویرایش شد.")
+                    elif p[0]=="حذف" and len(p)==2:
+                        target=await s.get(User,int(p[1]))
+                        if not target or target.role!="ASSIGNER": raise ValueError("تعیین‌کننده پیدا نشد.")
+                        target.role,target.active,target.telegram_id,target.login_username,target.password_hash="PENDING",False,None,None,None
+                        await s.commit(); await update.message.reply_text("✅ تعیین‌کننده حذف و حساب او غیرفعال شد.")
+                    else: raise ValueError("فرمت: افزودن|نام کاربری|رمز|نام / ویرایش|شناسه|نام کاربری|رمز|نام / حذف|شناسه")
                 elif state == "admin_subject":
                     p=[x.strip() for x in text.split("|")]
                     if p[0]=="افزودن" and len(p)>=3:
