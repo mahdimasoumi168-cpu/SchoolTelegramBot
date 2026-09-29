@@ -11,9 +11,9 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, ContextTypes, filters
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 )
 
 load_dotenv()
@@ -203,7 +203,29 @@ ROLE_NAMES = {"STUDENT": "دانش‌آموز", "ASSIGNER": "تعیین‌کنن
 
 
 def keyboard(rows):
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(label, callback_data=f"menu:{label}") for label in row] for row in rows]
+    )
+
+
+class _CallbackMessage:
+    def __init__(self, message, text):
+        self._message = message
+        self.text = text
+
+    def __getattr__(self, name):
+        return getattr(self._message, name)
+
+
+class _CallbackUpdate:
+    def __init__(self, query, text):
+        self.callback_query = query
+        self.message = _CallbackMessage(query.message, text)
+        self.effective_user = query.from_user
+
+
+def callback_update(query, text):
+    return _CallbackUpdate(query, text)
 
 
 async def db_user(tg_id: int) -> User | None:
@@ -262,6 +284,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     await panel(update, f"سلام {u.name} 👋\nنقش شما: {ROLE_NAMES[u.role]}")
+
+
+async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not query.data or not query.data.startswith("menu:"):
+        return
+    text = query.data[5:]
+    u = await db_user(query.from_user.id)
+    if not u or not u.active or u.role == "PENDING":
+        await query.message.reply_text("حساب شما فعال نیست. برای ورود دوباره /start را بزنید.")
+        return
+    proxy = callback_update(query, text)
+    if text == "🚪 خروج":
+        await logout(proxy, context)
+        return
+    if u.role == "STUDENT":
+        await show_student(proxy, u)
+    elif u.role == "ASSIGNER":
+        await show_assigner(proxy, context, u)
+    elif u.role == "ADMIN":
+        await show_admin(proxy, context, u)
 
 
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -930,6 +974,7 @@ async def post_init(app: Application):
 def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:"))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
     app.add_error_handler(error_handler)
