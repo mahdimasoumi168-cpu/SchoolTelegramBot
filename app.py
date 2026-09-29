@@ -567,10 +567,10 @@ async def show_admin(update, context, u):
     t = update.message.text
     if t == "👨‍🎓 مدیریت دانش‌آموزان":
         context.user_data["state"] = "admin_student"
-        await update.message.reply_text("فرمت افزودن/تغییر دانش‌آموز:\ntelegram_id|نام|نام کلاس\nاگر کاربر وجود نداشته باشد ساخته می‌شود.")
+        await update.message.reply_text("فرمت ثبت/ویرایش دانش‌آموز:\nافزودن|کد مدرسه|نام|کلاس\nویرایش|شناسه|کد مدرسه|نام|کلاس\nحذف|شناسه")
     elif t == "👤 مدیریت تعیین‌کنندگان":
         context.user_data["state"] = "admin_assigner"
-        await update.message.reply_text("فرمت افزودن تعیین‌کننده:\ntelegram_id|نام")
+        await update.message.reply_text("فرمت ثبت/ویرایش تعیین‌کننده:\nافزودن|نام کاربری|رمز عبور|نام\nویرایش|شناسه|نام کاربری|رمز عبور|نام\nحذف|شناسه")
     elif t == "🏫 مدیریت کلاس‌ها":
         context.user_data["state"] = "admin_class"
         await update.message.reply_text("فرمت: نام کلاس\nبرای حذف: حذف|نام کلاس")
@@ -579,7 +579,7 @@ async def show_admin(update, context, u):
         await update.message.reply_text("فرمت افزودن درس:\nنام درس|نام کلاس|نام تعیین‌کننده اختیاری")
     elif t == "🔐 مدیریت دسترسی‌ها":
         context.user_data["state"] = "admin_access"
-        await update.message.reply_text("فرمت: telegram_id تعیین‌کننده|نام کلاس|نام درس\nبا این کار دسترسی تعیین‌کننده ثبت می‌شود.")
+        await update.message.reply_text("فرمت: افزودن|نام کاربری تعیین‌کننده|نام کلاس|نام درس\nحذف|شناسه دسترسی")
     elif t == "📝 مدیریت تکالیف":
         context.user_data["state"] = "admin_assignment"
         await update.message.reply_text("مدیریت تکالیف:\\nافزودن|نام درس|عنوان|متن|YYYY-MM-DD HH:MM\\nویرایش|شناسه|نام درس|عنوان|متن|YYYY-MM-DD HH:MM\\nحذف|شناسه")
@@ -1295,7 +1295,7 @@ async def post_init(app: Application):
 def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:)"))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
     app.add_error_handler(error_handler)
