@@ -539,7 +539,7 @@ async def show_assigner(update, context, u):
         await update.message.reply_text("فرمت امتحان:\nنام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات")
     elif t == "📖 جزوات":
         context.user_data["state"] = "assigner_note_title"
-        await update.message.reply_text("نام درس و عنوان جزوه را با | بفرستید: نام درس|عنوان")
+        await update.message.reply_text("مدیریت جزوات:\\nافزودن|نام درس|عنوان سپس فایل را ارسال کنید\\nحذف|شناسه جزوه")
     elif t == "❓ سؤالات":
         async with SessionLocal() as s:
             allowed_ids = (await s.execute(select(Access.subject_id).where(Access.assigner_user_id == u.id, Access.subject_id.is_not(None)))).scalars().all()
@@ -582,16 +582,16 @@ async def show_admin(update, context, u):
         await update.message.reply_text("فرمت: telegram_id تعیین‌کننده|نام کلاس|نام درس\nبا این کار دسترسی تعیین‌کننده ثبت می‌شود.")
     elif t == "📝 مدیریت تکالیف":
         context.user_data["state"] = "admin_assignment"
-        await update.message.reply_text("فرمت: نام درس|عنوان|متن|YYYY-MM-DD HH:MM")
+        await update.message.reply_text("مدیریت تکالیف:\\nافزودن|نام درس|عنوان|متن|YYYY-MM-DD HH:MM\\nویرایش|شناسه|نام درس|عنوان|متن|YYYY-MM-DD HH:MM\\nحذف|شناسه")
     elif t == "📝 مدیریت امتحانات":
         context.user_data["state"] = "admin_exam"
-        await update.message.reply_text("فرمت: نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات")
+        await update.message.reply_text("مدیریت امتحانات:\\nافزودن|نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات\\nویرایش|شناسه|نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات\\nحذف|شناسه")
     elif t == "📖 مدیریت جزوات":
         context.user_data["state"] = "admin_note_title"
         await update.message.reply_text("نام درس و عنوان جزوه را با | بفرستید: نام درس|عنوان")
     elif t == "📅 مدیریت برنامه هفتگی":
         context.user_data["state"] = "admin_schedule"
-        await update.message.reply_text("فرمت: نام کلاس|نام درس|روز|زنگ")
+        await update.message.reply_text("مدیریت برنامه هفتگی:\\nافزودن|نام کلاس|نام درس|روز|زنگ\\nویرایش|شناسه|نام کلاس|نام درس|روز|زنگ\\nحذف|شناسه")
     elif t in ("📢 مدیریت اطلاعیه‌ها", "📨 ارسال پیام همگانی"):
         context.user_data["state"] = "admin_announcement"
         await update.message.reply_text("فرمت: عنوان|متن|نام کلاس اختیاری\nبرای همه کلاس‌ها، بخش کلاس را خالی بگذارید.")
@@ -603,19 +603,13 @@ async def show_admin(update, context, u):
             data = (await s.execute(select(Question, User).join(User, Question.student_user_id == User.id).order_by(Question.id.desc()).limit(50))).all()
             await update.message.reply_text("\n\n".join(f"#{q.id} [{q.status}] {usr.name}\n{q.text}\nپاسخ: {q.answer or '---'}" for q, usr in data) or "سؤالی ثبت نشده.")
     elif t == "👥 مدیریت کاربران":
-        context.user_data["state"] = "admin_user"
-        async with SessionLocal() as s:
-            pending = (await s.execute(select(User).where(User.role == "PENDING").order_by(User.id.desc()).limit(50))).scalars().all()
-        if pending:
-            listing = "\\n".join(f"• {x.name} — {x.telegram_id}" for x in pending)
-            await update.message.reply_text(
-                "⏳ کاربران در انتظار نقش:\\n" + listing +
-                "\\n\\nبرای تعیین نقش:\\ntelegram_id|نام|STUDENT یا ASSIGNER یا ADMIN\\nبرای قرار دادن دوباره در انتظار: telegram_id|نام|PENDING"
-            )
-        else:
-            await update.message.reply_text(
-                "⏳ کاربر در انتظار نقشی وجود ندارد.\\n\\nبرای ثبت/تغییر نقش:\\ntelegram_id|نام|STUDENT یا ASSIGNER یا ADMIN\\nبرای قرار دادن در انتظار: telegram_id|نام|PENDING"
-            )
+        await update.message.reply_text(
+            "👥 مدیریت کاربران\n\n"
+            "حساب‌ها باید از قبل توسط مدیریت ثبت شوند.\n"
+            "دانش‌آموز: کد مدرسه|نام|کلاس\n"
+            "تعیین‌کننده: نام کاربری|رمز عبور|نام\n\n"
+            "برای تغییر یا غیرفعال‌کردن حساب از بخش مربوط به دانش‌آموزان یا تعیین‌کنندگان استفاده کنید."
+        )
     elif t in ("📊 گزارش‌ها", "📋 گزارش فعالیت‌ها", "🕐 تاریخچه تغییرات"):
         async with SessionLocal() as s:
             users = await s.scalar(select(User).count()) if False else None
@@ -845,28 +839,23 @@ async def process_state(update, context, u):
                     await log_action(u.id, "user_role_changed", f"{tid}|{role}")
                     await update.message.reply_text("نقش کاربر با موفقیت تغییر کرد.")
                 elif state == "admin_class":
-                    parts = text.split("|", 1)
-                    if parts[0] == "حذف" and len(parts) == 2:
-                        c = await get_class_by_name(s, parts[1])
-                        if not c:
-                            await update.message.reply_text("کلاس پیدا نشد.")
-                        else:
-                            student_count = await s.scalar(select(Student.id).where(Student.class_id == c.id).limit(1))
-                            subject_count = await s.scalar(select(Subject.id).where(Subject.class_id == c.id).limit(1))
-                            access_count = await s.scalar(select(Access.id).where(Access.class_id == c.id).limit(1))
-                            schedule_count = await s.scalar(select(Schedule.id).where(Schedule.class_id == c.id).limit(1))
-                            announcement_count = await s.scalar(select(Announcement.id).where(Announcement.class_id == c.id).limit(1))
-                            if any(x is not None for x in (student_count, subject_count, access_count, schedule_count, announcement_count)):
-                                raise ValueError("این کلاس هنوز وابستگی دارد؛ ابتدا وابستگی‌های آن را مدیریت کنید.")
-                            await s.delete(c)
-                            await s.commit()
-                            await update.message.reply_text("کلاس حذف شد.")
-                    else:
-                        if not text:
-                            raise ValueError("نام کلاس خالی است.")
-                        c = ClassRoom(name=text)
-                        s.add(c); await s.commit()
-                        await update.message.reply_text("کلاس اضافه شد.")
+                    p=[x.strip() for x in text.split("|")]
+                    if not p[0]: raise ValueError("عملیات مشخص نشده است.")
+                    if p[0] == "افزودن" and len(p)==2:
+                        if await get_class_by_name(s,p[1]): raise ValueError("این کلاس از قبل وجود دارد.")
+                        s.add(ClassRoom(name=p[1])); await s.commit(); await update.message.reply_text("✅ کلاس اضافه شد.")
+                    elif p[0] == "ویرایش" and len(p)==3:
+                        old,new=p[1],p[2]; c0=await get_class_by_name(s,old)
+                        if not c0: raise ValueError("کلاس پیدا نشد.")
+                        if await get_class_by_name(s,new): raise ValueError("نام جدید قبلاً استفاده شده است.")
+                        c0.name=new; await s.commit(); await update.message.reply_text("✅ نام کلاس ویرایش شد.")
+                    elif p[0] == "حذف" and len(p)==2:
+                        c0=await get_class_by_name(s,p[1])
+                        if not c0: raise ValueError("کلاس پیدا نشد.")
+                        deps=[await s.scalar(select(Student.id).where(Student.class_id==c0.id).limit(1)),await s.scalar(select(Subject.id).where(Subject.class_id==c0.id).limit(1)),await s.scalar(select(Access.id).where(Access.class_id==c0.id).limit(1)),await s.scalar(select(Schedule.id).where(Schedule.class_id==c0.id).limit(1)),await s.scalar(select(Announcement.id).where(Announcement.class_id==c0.id).limit(1))]
+                        if any(x is not None for x in deps): raise ValueError("این کلاس هنوز وابستگی دارد؛ ابتدا آن‌ها را مدیریت کنید.")
+                        await s.delete(c0); await s.commit(); await update.message.reply_text("✅ کلاس حذف شد.")
+                    else: raise ValueError("فرمت: افزودن|نام کلاس / ویرایش|نام قبلی|نام جدید / حذف|نام کلاس")
                 elif state == "admin_student":
                     parts = [x.strip() for x in text.split("|", 2)]
                     if len(parts) != 3 or not all(parts):
@@ -913,28 +902,40 @@ async def process_state(update, context, u):
                     await log_action(u.id, "assigner_provisioned", username)
                     await update.message.reply_text("✅ حساب تعیین‌کننده ثبت شد.\nورود فقط با «نام کاربری + رمز عبور» انجام می‌شود.")
                 elif state == "admin_subject":
-                    parts = [x.strip() for x in text.split("|")]
-                    if len(parts) < 2 or not parts[0] or not parts[1]:
-                        raise ValueError("فرمت درست: نام درس|نام کلاس|نام تعیین‌کننده اختیاری")
-                    name, clsname, *rest = parts
-                    c = await get_class_by_name(s, clsname)
-                    if not c: raise ValueError("کلاس وجود ندارد.")
-                    sub = Subject(name=name, class_id=c.id, teacher_name=(rest[0] if rest else ""))
-                    s.add(sub); await s.commit(); await update.message.reply_text("درس ثبت شد.")
+                    p=[x.strip() for x in text.split("|")]
+                    if p[0]=="افزودن" and len(p)>=3:
+                        name,clsname=p[1],p[2]; teacher=p[3] if len(p)>3 else ""
+                        c0=await get_class_by_name(s,clsname)
+                        if not c0: raise ValueError("کلاس وجود ندارد.")
+                        exists=await s.scalar(select(Subject.id).where(Subject.name==name,Subject.class_id==c0.id).limit(1))
+                        if exists: raise ValueError("این درس قبلاً در کلاس ثبت شده است.")
+                        s.add(Subject(name=name,class_id=c0.id,teacher_name=teacher)); await s.commit(); await update.message.reply_text("✅ درس ثبت شد.")
+                    elif p[0]=="ویرایش" and len(p)==4:
+                        sub=await s.get(Subject,int(p[1]))
+                        c0=await get_class_by_name(s,p[3])
+                        if not sub or not c0: raise ValueError("درس یا کلاس پیدا نشد.")
+                        sub.name,sub.class_id=p[2],c0.id; await s.commit(); await update.message.reply_text("✅ درس ویرایش شد.")
+                    elif p[0]=="حذف" and len(p)==2:
+                        sub=await s.get(Subject,int(p[1]))
+                        if not sub: raise ValueError("درس پیدا نشد.")
+                        deps=[await s.scalar(select(Assignment.id).where(Assignment.subject_id==sub.id).limit(1)),await s.scalar(select(Exam.id).where(Exam.subject_id==sub.id).limit(1)),await s.scalar(select(Schedule.id).where(Schedule.subject_id==sub.id).limit(1)),await s.scalar(select(Note.id).where(Note.subject_id==sub.id).limit(1)),await s.scalar(select(Question.id).where(Question.subject_id==sub.id).limit(1))]
+                        if any(x is not None for x in deps): raise ValueError("این درس هنوز وابستگی دارد؛ ابتدا وابستگی‌ها را مدیریت کنید.")
+                        await s.delete(sub); await s.commit(); await update.message.reply_text("✅ درس حذف شد.")
+                    else: raise ValueError("فرمت عملیات درس درست نیست.")
                 elif state == "admin_access":
-                    parts = [x.strip() for x in text.split("|", 2)]
-                    if len(parts) != 3:
-                        raise ValueError("فرمت درست: telegram_id|نام کلاس|نام درس")
-                    tid, clsname, subname = parts
-                    au = (await s.execute(select(User).where(User.telegram_id == int(tid), User.role == "ASSIGNER"))).scalar_one_or_none()
-                    c = await get_class_by_name(s, clsname)
-                    sub = (await s.execute(select(Subject).where(Subject.name == subname, Subject.class_id == c.id))).scalar_one_or_none() if c else None
-                    if not au or not c or not sub: raise ValueError("تعیین‌کننده/کلاس/درس پیدا نشد.")
-                    exists = await s.scalar(select(Access.id).where(Access.assigner_user_id == au.id, Access.class_id == c.id, Access.subject_id == sub.id).limit(1))
-                    if exists is not None:
-                        await update.message.reply_text("این دسترسی از قبل وجود دارد.")
-                    else:
-                        s.add(Access(assigner_user_id=au.id, class_id=c.id, subject_id=sub.id)); await s.commit(); await update.message.reply_text("دسترسی ثبت شد.")
+                    p=[x.strip() for x in text.split("|")]
+                    if p[0]=="افزودن" and len(p)==4:
+                        username,clsname,subname=p[1:]
+                        au=(await s.execute(select(User).where(User.login_username==username,User.role=="ASSIGNER"))).scalar_one_or_none()
+                        c0=await get_class_by_name(s,clsname); sub=(await s.execute(select(Subject).where(Subject.name==subname,Subject.class_id==c0.id))).scalar_one_or_none() if c0 else None
+                        if not au or not c0 or not sub: raise ValueError("تعیین‌کننده، کلاس یا درس پیدا نشد.")
+                        if await s.scalar(select(Access.id).where(Access.assigner_user_id==au.id,Access.class_id==c0.id,Access.subject_id==sub.id).limit(1)): raise ValueError("این دسترسی از قبل ثبت شده است.")
+                        s.add(Access(assigner_user_id=au.id,class_id=c0.id,subject_id=sub.id)); await s.commit(); await update.message.reply_text("✅ دسترسی ثبت شد.")
+                    elif p[0]=="حذف" and len(p)==2:
+                        acc=await s.get(Access,int(p[1]))
+                        if not acc: raise ValueError("دسترسی پیدا نشد.")
+                        await s.delete(acc); await s.commit(); await update.message.reply_text("✅ دسترسی حذف شد.")
+                    else: raise ValueError("فرمت: افزودن|نام کاربری|نام کلاس|نام درس / حذف|شناسه")
                 elif state in ("admin_assignment", "admin_exam"):
                     p = [x.strip() for x in text.split("|", 3)]
                     if len(p) < 3 or not p[0] or not p[1] or not p[2]:
