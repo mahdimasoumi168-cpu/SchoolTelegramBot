@@ -1,5 +1,7 @@
 import os
 import logging
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -72,8 +74,10 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    telegram_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(150), default="")
+    login_username: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(String(300), nullable=True)
     role: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -90,6 +94,8 @@ class Student(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
     class_id: Mapped[int | None] = mapped_column(ForeignKey("classes.id"), nullable=True)
+    school_code: Mapped[str] = mapped_column(String(80), default="", index=True)
+    login_name: Mapped[str] = mapped_column(String(150), default="", index=True)
 
 
 class Subject(Base):
@@ -227,6 +233,24 @@ ADMIN_MENU = [
 ROLE_NAMES = {"STUDENT": "دانش‌آموز", "ASSIGNER": "تعیین‌کننده", "ADMIN": "مدیریت", "PENDING": "در انتظار تأیید"}
 
 
+def norm_name(value: str) -> str:
+    return " ".join((value or "").strip().casefold().split())
+
+
+def hash_password(password: str, salt: str | None = None) -> str:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 200000).hex()
+    return salt + "$" + digest
+
+
+def verify_password(password: str, stored: str | None) -> bool:
+    if not stored or "$" not in stored:
+        return False
+    salt, digest = stored.split("$", 1)
+    check = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 200000).hex()
+    return secrets.compare_digest(check, digest)
+
+
 def keyboard(rows):
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(label, callback_data=f"menu:{label}") for label in row] for row in rows]
@@ -258,18 +282,8 @@ async def db_user(tg_id: int) -> User | None:
         return (await s.execute(select(User).where(User.telegram_id == tg_id))).scalar_one_or_none()
 
 
-async def ensure_user(tg_id: int, name: str) -> User:
-    async with SessionLocal() as s:
-        u = (await s.execute(select(User).where(User.telegram_id == tg_id))).scalar_one_or_none()
-        if not u:
-            u = User(telegram_id=tg_id, name=name, role="PENDING", active=True)
-            s.add(u)
-            await s.commit()
-            await s.refresh(u)
-        elif name and u.name != name:
-            u.name = name
-            await s.commit()
-        return u
+async def ensure_user(tg_id: int, name: str) -> User | None:
+    return await db_user(tg_id)
 
 
 async def log_action(user_id: int | None, action: str, details: str = ""):
@@ -319,40 +333,57 @@ async def notify_pending_admin(context: ContextTypes.DEFAULT_TYPE, u: User):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     tg = update.effective_user
-    u = await ensure_user(tg.id, tg.full_name or tg.username or str(tg.id))
-    u.active = True
-    async with SessionLocal() as s:
-        x = (await s.execute(select(User).where(User.id == u.id))).scalar_one()
-        x.active = True
-        await s.commit()
-    if u.role == "PENDING":
-        await notify_pending_admin(context, u)
-        await update.message.reply_text(
-            "سلام 🌷\nحساب شما هنوز نقش نگرفته است. درخواست شما برای مدیریت مدرسه ثبت شد. لطفاً منتظر تعیین نقش بمانید.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+    if ADMIN_TELEGRAM_ID and str(tg.id) == ADMIN_TELEGRAM_ID:
+        async with SessionLocal() as s:
+            u = (await s.execute(select(User).where(User.telegram_id == tg.id))).scalar_one_or_none()
+            if not u:
+                s.add(User(telegram_id=tg.id, name="مدیریت", role="ADMIN", active=True))
+            else:
+                u.role, u.active = "ADMIN", True
+            await s.commit()
+        await panel(update, "⚙️ پنل مدیریت\nدسترسی مدیر فعال است.")
         return
-    await panel(update, f"سلام {u.name} 👋\nنقش شما: {ROLE_NAMES[u.role]}")
+    u = await db_user(tg.id)
+    if u and u.active and u.role in ("STUDENT", "ASSIGNER"):
+        await panel(update, f"سلام {u.name} 👋\nنقش شما: {ROLE_NAMES[u.role]}")
+        return
+    context.user_data["state"] = "auth_choice"
+    await update.message.reply_text(
+        "🔐 ورود به سامانه مدرسه\n\nلطفاً نوع حساب خود را انتخاب کنید:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("👨‍🎓 ورود دانش‌آموز", callback_data="auth:student")],
+            [InlineKeyboardButton("👤 ورود تعیین‌کننده", callback_data="auth:assigner")],
+        ])
+    )
 
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not query.data or not query.data.startswith("menu:"):
+    data = query.data or ""
+    if data == "auth:student":
+        context.user_data.clear()
+        context.user_data["state"] = "auth_student"
+        await query.message.reply_text("👨‍🎓 ورود دانش‌آموز\n\nکد مدرسه و نام را با | جدا کنید:\nکد مدرسه|نام و نام خانوادگی")
         return
-    text = query.data[5:]
+    if data == "auth:assigner":
+        context.user_data.clear()
+        context.user_data["state"] = "auth_assigner"
+        await query.message.reply_text("👤 ورود تعیین‌کننده\n\nنام کاربری و رمز عبور را با | جدا کنید:\nنام کاربری|رمز عبور")
+        return
+    if not data.startswith("menu:"):
+        return
+    text = data[5:]
     u = await db_user(query.from_user.id)
     if not u or not u.active or u.role == "PENDING":
-        await query.message.reply_text("حساب شما فعال نیست. برای ورود دوباره /start را بزنید.")
+        await query.message.reply_text("حساب شما فعال نیست. ابتدا /start را بزنید و با اطلاعاتی که مدیریت ثبت کرده وارد شوید.")
         return
     if text == "🚪 خروج":
         await logout(callback_update(query, text), context)
         return
-    # Some student actions need the real CallbackContext; handle them here
-    # instead of relying on the synthetic callback update object.
     if u.role == "STUDENT" and text == "❓ سؤال":
         context.user_data["state"] = "student_question"
-        await query.message.reply_text("سؤال خود را بنویسید. برای لغو «انصراف» را بزنید.")
+        await query.message.reply_text("سؤال خود را بنویسید. برای سؤال درسی «نام درس|متن سؤال» را بفرستید؛ برای لغو «انصراف».")
         return
     proxy = callback_update(query, text)
     if u.role == "STUDENT":
@@ -1077,17 +1108,19 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if engine.dialect.name == "postgresql":
+            await conn.execute(text("ALTER TABLE users ALTER COLUMN telegram_id DROP NOT NULL"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS login_username VARCHAR(100)"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(300)"))
+            await conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS school_code VARCHAR(80) DEFAULT ''"))
+            await conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS login_name VARCHAR(150) DEFAULT ''"))
+            await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_login_username_unique ON users (login_username) WHERE login_username IS NOT NULL"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_students_school_code ON students (school_code)"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_students_login_name ON students (login_name)"))
     if ADMIN_TELEGRAM_ID:
         async with SessionLocal() as s:
             tid = int(ADMIN_TELEGRAM_ID)
-            # Railway's ADMIN_TELEGRAM_ID is the single source of truth for the
-            # current administrator. Demote/deactivate every other ADMIN so an
-            # old administrator cannot retain management access after handover.
-            await s.execute(
-                User.__table__.update()
-                .where(User.telegram_id != tid, User.role == "ADMIN")
-                .values(role="PENDING", active=False)
-            )
+            await s.execute(User.__table__.update().where(User.telegram_id != tid, User.role == "ADMIN").values(role="PENDING", active=False))
             u = (await s.execute(select(User).where(User.telegram_id == tid))).scalar_one_or_none()
             if not u:
                 s.add(User(telegram_id=tid, name="مدیریت", role="ADMIN", active=True))
