@@ -371,12 +371,12 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "auth:student":
         context.user_data.clear()
         context.user_data["state"] = "auth_student"
-        await query.message.reply_text("👨‍🎓 ورود دانش‌آموز\n\nکد مدرسه و نام را با | جدا کنید:\nکد مدرسه|نام و نام خانوادگی")
+        await query.message.reply_text("👨‍🎓 ورود دانش‌آموز\n\nابتدا کد مدرسه را ارسال کنید:")
         return
     if data == "auth:assigner":
         context.user_data.clear()
         context.user_data["state"] = "auth_assigner"
-        await query.message.reply_text("👤 ورود تعیین‌کننده\n\nنام کاربری و رمز عبور را با | جدا کنید:\nنام کاربری|رمز عبور")
+        await query.message.reply_text("👤 ورود تعیین‌کننده\n\nابتدا نام کاربری را ارسال کنید:")
         return
     if not data.startswith("menu:"):
         return
@@ -766,12 +766,100 @@ async def process_state(update, context, u):
         await panel(update, "عملیات لغو شد.")
         return True
 
-    if state == "auth_student":
-        parts = [x.strip() for x in text.split("|", 1)]
-        if len(parts) != 2 or not parts[0] or not parts[1]:
-            await update.message.reply_text("فرمت ورود درست نیست.\nکد مدرسه|نام و نام خانوادگی")
+    if state == "auth_student_school_code":
+        school_code = text.strip()
+        if not school_code:
+            await update.message.reply_text("❌ کد مدرسه نمی‌تواند خالی باشد. دوباره ارسال کنید:")
             return True
-        code, name = parts
+        context.user_data["school_code"] = school_code
+        context.user_data["state"] = "auth_student_name"
+        await update.message.reply_text("حالا نام و نام خانوادگی را ارسال کنید:")
+        return True
+
+    if state == "auth_student_name":
+        name = text.strip()
+        school_code = context.user_data.get("school_code", "").strip()
+        if not name:
+            await update.message.reply_text("❌ نام نمی‌تواند خالی باشد. دوباره ارسال کنید:")
+            return True
+        async with SessionLocal() as s:
+            q = await s.execute(
+                select(Student, User).join(User, Student.user_id == User.id).where(
+                    Student.school_code == school_code,
+                    Student.login_name == norm_name(name),
+                    User.role == "STUDENT"
+                )
+            )
+            rows = q.all()
+            if len(rows) != 1:
+                await update.message.reply_text("❌ اطلاعات ورود پیدا نشد. کد مدرسه یا نام را بررسی کنید.")
+                return True
+            st, account = rows[0]
+            if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
+                await update.message.reply_text("❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
+                return True
+            account.telegram_id = update.effective_user.id
+            account.active = True
+            account.name = st.login_name
+            await s.commit()
+        context.user_data.clear()
+        await log_action(account.id, "student_login", school_code)
+        await panel(update, f"سلام {account.name} 👋\nورود با موفقیت انجام شد.\n🏫 کد مدرسه: {school_code}")
+        return True
+
+    if state == "auth_assigner_username":
+        username = text.strip()
+        if not username:
+            await update.message.reply_text("❌ نام کاربری نمی‌تواند خالی باشد. دوباره ارسال کنید:")
+            return True
+        context.user_data["login_username"] = username
+        context.user_data["state"] = "auth_assigner_password"
+        await update.message.reply_text("حالا رمز عبور را ارسال کنید:")
+        return True
+
+    if state == "auth_assigner_password":
+        username = context.user_data.get("login_username", "").strip()
+        password = text
+        if not password:
+            await update.message.reply_text("❌ رمز عبور نمی‌تواند خالی باشد. دوباره ارسال کنید:")
+            return True
+        async with SessionLocal() as s:
+            account = (await s.execute(
+                select(User).where(User.login_username == username, User.role == "ASSIGNER", User.active.is_(True))
+            )).scalar_one_or_none()
+            if not account or not verify_password(password, account.password_hash):
+                await update.message.reply_text("❌ نام کاربری یا رمز عبور نادرست است. دوباره /start را بزنید.")
+                context.user_data.clear()
+                return True
+            if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
+                await update.message.reply_text("❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
+                return True
+            account.telegram_id = update.effective_user.id
+            await s.commit()
+        context.user_data.clear()
+        await log_action(account.id, "assigner_login", username)
+        await panel(update, f"سلام {account.name} 👋\nورود با موفقیت انجام شد.")
+        return True
+
+    if state == "auth_student":
+        # Backward-compatible single-message login for old clients/flows.
+        parts = [x.strip() for x in text.split("|", 1)]
+        if len(parts) == 2 and all(parts):
+            context.user_data["school_code"] = parts[0]
+            context.user_data["state"] = "auth_student_name"
+            text = parts[1]
+            # Continue through the normal name-validation flow below.
+            state = "auth_student_name"
+        else:
+            context.user_data["state"] = "auth_student_school_code"
+            await update.message.reply_text("ابتدا کد مدرسه را ارسال کنید:")
+            return True
+    if state == "auth_student_name" and "school_code" in context.user_data:
+        name = text.strip()
+        code = context.user_data.get("school_code", "").strip()
+        if not name:
+            await update.message.reply_text("❌ نام نمی‌تواند خالی باشد. دوباره ارسال کنید:")
+            return True
         async with SessionLocal() as s:
             q = await s.execute(
                 select(Student, User).join(User, Student.user_id == User.id).where(
@@ -799,10 +887,18 @@ async def process_state(update, context, u):
 
     if state == "auth_assigner":
         parts = [x.strip() for x in text.split("|", 1)]
-        if len(parts) != 2 or not parts[0] or not parts[1]:
-            await update.message.reply_text("فرمت ورود درست نیست.\nنام کاربری|رمز عبور")
+        if len(parts) == 2 and all(parts):
+            context.user_data["login_username"] = parts[0]
+            context.user_data["state"] = "auth_assigner_password"
+            text = parts[1]
+            state = "auth_assigner_password"
+        else:
+            context.user_data["state"] = "auth_assigner_username"
+            await update.message.reply_text("ابتدا نام کاربری را ارسال کنید:")
             return True
-        username, password = parts
+    if state == "auth_assigner_password" and "login_username" in context.user_data:
+        username = context.user_data.get("login_username", "").strip()
+        password = text
         async with SessionLocal() as s:
             account = (await s.execute(
                 select(User).where(User.login_username == username, User.role == "ASSIGNER", User.active.is_(True))
