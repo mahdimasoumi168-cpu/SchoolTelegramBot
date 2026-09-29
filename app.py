@@ -268,6 +268,29 @@ async def panel(update: Update, text: str = "منوی پنل:"):
         await update.message.reply_text("حساب شما هنوز توسط مدیریت تأیید نشده است.", reply_markup=ReplyKeyboardRemove())
 
 
+async def notify_pending_admin(context: ContextTypes.DEFAULT_TYPE, u: User):
+    if not ADMIN_TELEGRAM_ID:
+        return
+    try:
+        async with SessionLocal() as s:
+            already = await s.scalar(
+                select(ActivityLog.id).where(
+                    ActivityLog.action == "pending_user_notice",
+                    ActivityLog.details == str(u.telegram_id),
+                ).limit(1)
+            )
+            if already is not None:
+                return
+            s.add(ActivityLog(user_id=u.id, action="pending_user_notice", details=str(u.telegram_id)))
+            await s.commit()
+        await context.bot.send_message(
+            int(ADMIN_TELEGRAM_ID),
+            f"👤 کاربر جدید در انتظار نقش است.\\nنام: {u.name}\\nTelegram ID: {u.telegram_id}\\n\\nاز «👥 مدیریت کاربران» نقش STUDENT یا ASSIGNER را تعیین کنید."
+        )
+    except Exception:
+        log.exception("pending user notification failed")
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     tg = update.effective_user
@@ -278,8 +301,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         x.active = True
         await s.commit()
     if u.role == "PENDING":
+        await notify_pending_admin(context, u)
         await update.message.reply_text(
-            "سلام 🌷\nحساب شما هنوز نقش نگرفته است. لطفاً با مدیریت مدرسه هماهنگ کنید.",
+            "سلام 🌷\nحساب شما هنوز نقش نگرفته است. درخواست شما برای مدیریت مدرسه ثبت شد. لطفاً منتظر تعیین نقش بمانید.",
             reply_markup=ReplyKeyboardRemove(),
         )
         return
@@ -514,7 +538,18 @@ async def show_admin(update, context, u):
             await update.message.reply_text("\n\n".join(f"#{q.id} [{q.status}] {usr.name}\n{q.text}\nپاسخ: {q.answer or '---'}" for q, usr in data) or "سؤالی ثبت نشده.")
     elif t == "👥 مدیریت کاربران":
         context.user_data["state"] = "admin_user"
-        await update.message.reply_text("برای تغییر/ثبت نقش:\ntelegram_id|نام|STUDENT یا ASSIGNER یا ADMIN\nبرای غیرفعال‌کردن: telegram_id|نام|PENDING")
+        async with SessionLocal() as s:
+            pending = (await s.execute(select(User).where(User.role == "PENDING").order_by(User.id.desc()).limit(50))).scalars().all()
+        if pending:
+            listing = "\\n".join(f"• {x.name} — {x.telegram_id}" for x in pending)
+            await update.message.reply_text(
+                "⏳ کاربران در انتظار نقش:\\n" + listing +
+                "\\n\\nبرای تعیین نقش:\\ntelegram_id|نام|STUDENT یا ASSIGNER یا ADMIN\\nبرای قرار دادن دوباره در انتظار: telegram_id|نام|PENDING"
+            )
+        else:
+            await update.message.reply_text(
+                "⏳ کاربر در انتظار نقشی وجود ندارد.\\n\\nبرای ثبت/تغییر نقش:\\ntelegram_id|نام|STUDENT یا ASSIGNER یا ADMIN\\nبرای قرار دادن در انتظار: telegram_id|نام|PENDING"
+            )
     elif t in ("📊 گزارش‌ها", "📋 گزارش فعالیت‌ها", "🕐 تاریخچه تغییرات"):
         async with SessionLocal() as s:
             users = await s.scalar(select(User).count()) if False else None
@@ -654,6 +689,15 @@ async def process_state(update, context, u):
                     else:
                         target.name, target.role, target.active = name, role, (role != "PENDING")
                     await s.commit()
+                    if role != "PENDING":
+                        try:
+                            await context.bot.send_message(
+                                target.telegram_id,
+                                f"✅ نقش حساب شما توسط مدیریت تعیین شد.\\nنقش شما: {ROLE_NAMES[role]}\\nبرای ورود /start را بزنید."
+                            )
+                        except Exception:
+                            log.exception("role notification failed")
+                    await log_action(u.id, "user_role_changed", f"{tid}|{role}")
                     await update.message.reply_text("نقش کاربر با موفقیت تغییر کرد.")
                 elif state == "admin_class":
                     parts = text.split("|", 1)
@@ -690,7 +734,14 @@ async def process_state(update, context, u):
                     st = (await s.execute(select(Student).where(Student.user_id == target.id))).scalar_one_or_none()
                     if not st: s.add(Student(user_id=target.id, class_id=c.id))
                     else: st.class_id = c.id
-                    await s.commit(); await update.message.reply_text("دانش‌آموز ثبت/به‌روزرسانی شد.")
+                    target.active = True
+                    await s.commit()
+                    try:
+                        await context.bot.send_message(target.telegram_id, f"✅ حساب شما به‌عنوان دانش‌آموز فعال شد.\\n🏫 کلاس: {c.name}\\nبرای ورود /start را بزنید.")
+                    except Exception:
+                        log.exception("student role notification failed")
+                    await log_action(u.id, "student_assigned", f"{tid}|{c.name}")
+                    await update.message.reply_text("دانش‌آموز ثبت/به‌روزرسانی شد.")
                 elif state == "admin_assigner":
                     tid, name = [x.strip() for x in text.split("|", 1)]
                     tid = int(tid)
@@ -699,7 +750,13 @@ async def process_state(update, context, u):
                         target = User(telegram_id=tid, name=name, role="ASSIGNER", active=True); s.add(target)
                     else:
                         target.name, target.role, target.active = name, "ASSIGNER", True
-                    await s.commit(); await update.message.reply_text("تعیین‌کننده ثبت شد.")
+                    await s.commit()
+                    try:
+                        await context.bot.send_message(target.telegram_id, "✅ حساب شما به‌عنوان تعیین‌کننده فعال شد.\\nبرای ورود /start را بزنید.")
+                    except Exception:
+                        log.exception("assigner role notification failed")
+                    await log_action(u.id, "assigner_assigned", str(tid))
+                    await update.message.reply_text("تعیین‌کننده ثبت شد.")
                 elif state == "admin_subject":
                     parts = [x.strip() for x in text.split("|")]
                     if len(parts) < 2 or not parts[0] or not parts[1]:
@@ -869,6 +926,8 @@ async def process_state(update, context, u):
                     q = await s.get(Question, int(qid))
                     if not q: raise ValueError("سؤال پیدا نشد.")
                     allowed_ids = set((await s.execute(select(Access.subject_id).where(Access.assigner_user_id == u.id, Access.subject_id.is_not(None)))).scalars().all())
+                    if not allowed_ids:
+                        raise ValueError("برای شما هیچ درس مجازی تعریف نشده است.")
                     if q.subject_id is not None and q.subject_id not in allowed_ids:
                         raise ValueError("این سؤال مربوط به درس‌های مجاز شما نیست.")
                     if q.status != "OPEN":
