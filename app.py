@@ -1015,6 +1015,14 @@ async def init_db():
     if ADMIN_TELEGRAM_ID:
         async with SessionLocal() as s:
             tid = int(ADMIN_TELEGRAM_ID)
+            # Railway's ADMIN_TELEGRAM_ID is the single source of truth for the
+            # current administrator. Demote/deactivate every other ADMIN so an
+            # old administrator cannot retain management access after handover.
+            await s.execute(
+                User.__table__.update()
+                .where(User.telegram_id != tid, User.role == "ADMIN")
+                .values(role="PENDING", active=False)
+            )
             u = (await s.execute(select(User).where(User.telegram_id == tid))).scalar_one_or_none()
             if not u:
                 s.add(User(telegram_id=tid, name="مدیریت", role="ADMIN", active=True))
