@@ -1,3 +1,4 @@
+import asyncio
 import os
 import logging
 import hashlib
@@ -649,25 +650,73 @@ async def get_subject_by_name(s, name):
 
 
 async def notify_class(bot, class_id: int | None, text: str, announcement_id: int):
+    # Send notifications concurrently so Telegram latency for one student
+    # cannot block the bot's other buttons and users.
     async with SessionLocal() as s:
-        q = select(User, Student).join(Student, Student.user_id == User.id).where(User.role == "STUDENT", User.active.is_(True))
+        q = select(User, Student).join(Student, Student.user_id == User.id).where(
+            User.role == "STUDENT",
+            User.active.is_(True),
+            User.telegram_id.is_not(None),
+        )
         if class_id is not None:
             q = q.where(Student.class_id == class_id)
         rows = (await s.execute(q)).all()
+        if not rows:
+            return
+
+        user_ids = [user.id for user, _ in rows]
+        existing = (await s.execute(
+            select(Delivery).where(
+                Delivery.announcement_id == announcement_id,
+                Delivery.user_id.in_(user_ids),
+            )
+        )).scalars().all()
+        by_user = {d.user_id: d for d in existing}
+
         for user, _ in rows:
-            d = (await s.execute(select(Delivery).where(Delivery.announcement_id == announcement_id, Delivery.user_id == user.id))).scalar_one_or_none()
-            if d and d.status == "SENT":
-                continue
-            if not d:
-                d = Delivery(announcement_id=announcement_id, user_id=user.id, status="PENDING")
+            if user.id not in by_user:
+                d = Delivery(
+                    announcement_id=announcement_id,
+                    user_id=user.id,
+                    status="PENDING",
+                    error="",
+                )
                 s.add(d)
+                by_user[user.id] = d
+        await s.commit()
+
+        targets = [
+            (user.id, user.telegram_id)
+            for user, _ in rows
+            if by_user[user.id].status != "SENT"
+        ]
+
+    semaphore = asyncio.Semaphore(10)
+
+    async def send_one(user_id, telegram_id):
+        async with semaphore:
             try:
-                await bot.send_message(user.telegram_id, text)
-                d.status = "SENT"
-                d.error = ""
+                await bot.send_message(telegram_id, text)
+                return user_id, "SENT", ""
             except Exception as e:
-                d.status = "FAILED"
-                d.error = str(e)[:1000]
+                return user_id, "FAILED", str(e)[:1000]
+
+    results = await asyncio.gather(
+        *(send_one(user_id, telegram_id) for user_id, telegram_id in targets),
+        return_exceptions=False,
+    )
+
+    async with SessionLocal() as s:
+        for user_id, status, error in results:
+            d = (await s.execute(
+                select(Delivery).where(
+                    Delivery.announcement_id == announcement_id,
+                    Delivery.user_id == user_id,
+                )
+            )).scalar_one_or_none()
+            if d:
+                d.status = status
+                d.error = error
         await s.commit()
 
 
@@ -799,11 +848,23 @@ async def process_state(update, context, u):
                 recipients = (await s.execute(
                     select(User).where(User.role.in_(("ADMIN", "ASSIGNER")), User.active.is_(True))
                 )).scalars().all()
-            for recipient in recipients:
-                try:
-                    await context.bot.send_message(recipient.telegram_id, f"❓ سؤال جدید #{question_id}\n👨‍🎓 {u.name}\n{question_text}")
-                except Exception:
-                    log.exception("question notification failed for user %s", recipient.id)
+            semaphore = asyncio.Semaphore(10)
+
+            async def notify_recipient(recipient):
+                async with semaphore:
+                    try:
+                        if recipient.telegram_id:
+                            await context.bot.send_message(
+                                recipient.telegram_id,
+                                f"❓ سؤال جدید #{question_id}\n👨‍🎓 {u.name}\n{question_text}",
+                            )
+                    except Exception:
+                        log.exception("question notification failed for user %s", recipient.id)
+
+            await asyncio.gather(
+                *(notify_recipient(recipient) for recipient in recipients),
+                return_exceptions=True,
+            )
             context.user_data.clear()
             await update.message.reply_text("سؤال شما ثبت شد و برای تعیین‌کننده/مدیریت ارسال شد. اگر درس را مشخص کرده باشید، فقط تعیین‌کنندگان مجاز همان درس آن را می‌بینند.", reply_markup=keyboard(STUDENT_MENU))
         except ValueError as e:
@@ -1293,7 +1354,16 @@ async def post_init(app: Application):
 
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        # Different users can use the bot concurrently; a slow DB/Telegram
+        # operation for one user no longer freezes every button.
+        .concurrent_updates(32)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:)"))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
