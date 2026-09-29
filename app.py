@@ -1,0 +1,811 @@
+import os
+import logging
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+from dotenv import load_dotenv
+from sqlalchemy import (
+    BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text,
+    UniqueConstraint, select, delete, or_
+)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, ContextTypes, filters
+)
+
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("school-bot")
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+TIMEZONE = os.getenv("TIMEZONE", "Asia/Tehran").strip()
+
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN is required")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is required")
+
+TZ = ZoneInfo(TIMEZONE)
+engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
+SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(150), default="")
+    role: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class ClassRoom(Base):
+    __tablename__ = "classes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+
+
+class Student(Base):
+    __tablename__ = "students"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    class_id: Mapped[int | None] = mapped_column(ForeignKey("classes.id"), nullable=True)
+
+
+class Subject(Base):
+    __tablename__ = "subjects"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"))
+    teacher_name: Mapped[str] = mapped_column(String(150), default="")
+    __table_args__ = (UniqueConstraint("name", "class_id", name="uq_subject_class"),)
+
+
+class Access(Base):
+    __tablename__ = "access"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    assigner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"))
+    subject_id: Mapped[int | None] = mapped_column(ForeignKey("subjects.id"), nullable=True)
+
+
+class Assignment(Base):
+    __tablename__ = "assignments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"))
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text, default="")
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+
+class Exam(Base):
+    __tablename__ = "exams"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"))
+    title: Mapped[str] = mapped_column(String(200))
+    exam_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    details: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+
+class Schedule(Base):
+    __tablename__ = "schedules"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"))
+    weekday: Mapped[str] = mapped_column(String(20))
+    period: Mapped[str] = mapped_column(String(50))
+    subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"))
+
+
+class Note(Base):
+    __tablename__ = "notes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"))
+    title: Mapped[str] = mapped_column(String(200))
+    file_id: Mapped[str] = mapped_column(String(300))
+    file_name: Mapped[str] = mapped_column(String(255), default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+
+class Announcement(Base):
+    __tablename__ = "announcements"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    class_id: Mapped[int | None] = mapped_column(ForeignKey("classes.id"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(30), default="announcement")
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+
+class Question(Base):
+    __tablename__ = "questions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    student_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    subject_id: Mapped[int | None] = mapped_column(ForeignKey("subjects.id"), nullable=True)
+    text: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="OPEN")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class ActivityLog(Base):
+    __tablename__ = "activity_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=True)
+    action: Mapped[str] = mapped_column(String(100))
+    details: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class Delivery(Base):
+    __tablename__ = "deliveries"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    announcement_id: Mapped[int] = mapped_column(ForeignKey("announcements.id"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    status: Mapped[str] = mapped_column(String(20), default="PENDING")
+    error: Mapped[str] = mapped_column(Text, default="")
+
+
+STUDENT_MENU = [
+    ["👨‍🎓 پنل دانش‌آموز", "📚 درس‌های من"],
+    ["📝 تکالیف", "📅 برنامه هفتگی"],
+    ["📝 امتحانات", "📢 اطلاعیه‌ها"],
+    ["❓ سؤال", "👤 حساب کاربری"],
+    ["📖 جزوات", "🔔 اطلاعیه فردا"],
+    ["🚪 خروج"],
+]
+
+ASSIGNER_MENU = [
+    ["👤 پنل تعیین‌کننده", "👨‍🎓 دانش‌آموزان"],
+    ["📚 درس‌ها", "📝 تکالیف"],
+    ["📢 ارسال اطلاعیه", "📅 برنامه هفتگی"],
+    ["📝 امتحانات", "📖 جزوات"],
+    ["❓ سؤالات", "🔔 اطلاعیه فردا"],
+    ["🚪 خروج"],
+]
+
+ADMIN_MENU = [
+    ["⚙️ پنل مدیریت"],
+    ["👨‍🎓 مدیریت دانش‌آموزان", "👤 مدیریت تعیین‌کنندگان"],
+    ["🏫 مدیریت کلاس‌ها", "📚 مدیریت درس‌ها"],
+    ["📝 مدیریت تکالیف", "📅 مدیریت برنامه هفتگی"],
+    ["📝 مدیریت امتحانات", "📖 مدیریت جزوات"],
+    ["📢 مدیریت اطلاعیه‌ها", "🔔 اطلاعیه فردا"],
+    ["❓ مدیریت سؤالات", "👥 مدیریت کاربران"],
+    ["📊 گزارش‌ها", "📨 ارسال پیام همگانی"],
+    ["🔔 ارسال اعلان", "🔐 مدیریت دسترسی‌ها"],
+    ["🗂️ مدیریت فایل‌ها", "📋 گزارش فعالیت‌ها"],
+    ["🕐 تاریخچه تغییرات", "⚙️ تنظیمات بات"],
+    ["🗄️ مدیریت دیتابیس", "🔒 تنظیمات امنیتی"],
+    ["🚪 خروج"],
+]
+
+ROLE_NAMES = {"STUDENT": "دانش‌آموز", "ASSIGNER": "تعیین‌کننده", "ADMIN": "مدیریت", "PENDING": "در انتظار تأیید"}
+
+
+def keyboard(rows):
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
+
+
+async def db_user(tg_id: int) -> User | None:
+    async with SessionLocal() as s:
+        return (await s.execute(select(User).where(User.telegram_id == tg_id))).scalar_one_or_none()
+
+
+async def ensure_user(tg_id: int, name: str) -> User:
+    async with SessionLocal() as s:
+        u = (await s.execute(select(User).where(User.telegram_id == tg_id))).scalar_one_or_none()
+        if not u:
+            u = User(telegram_id=tg_id, name=name, role="PENDING", active=True)
+            s.add(u)
+            await s.commit()
+            await s.refresh(u)
+        elif name and u.name != name:
+            u.name = name
+            await s.commit()
+        return u
+
+
+async def log_action(user_id: int | None, action: str, details: str = ""):
+    async with SessionLocal() as s:
+        s.add(ActivityLog(user_id=user_id, action=action, details=details))
+        await s.commit()
+
+
+async def panel(update: Update, text: str = "منوی پنل:"):
+    u = await db_user(update.effective_user.id)
+    if not u:
+        await update.message.reply_text("کاربر پیدا نشد. /start را بزنید.")
+        return
+    if u.role == "ADMIN":
+        await update.message.reply_text(text, reply_markup=keyboard(ADMIN_MENU))
+    elif u.role == "ASSIGNER":
+        await update.message.reply_text(text, reply_markup=keyboard(ASSIGNER_MENU))
+    elif u.role == "STUDENT":
+        await update.message.reply_text(text, reply_markup=keyboard(STUDENT_MENU))
+    else:
+        await update.message.reply_text("حساب شما هنوز توسط مدیریت تأیید نشده است.", reply_markup=ReplyKeyboardRemove())
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    tg = update.effective_user
+    u = await ensure_user(tg.id, tg.full_name or tg.username or str(tg.id))
+    u.active = True
+    async with SessionLocal() as s:
+        x = (await s.execute(select(User).where(User.id == u.id))).scalar_one()
+        x.active = True
+        await s.commit()
+    if u.role == "PENDING":
+        await update.message.reply_text(
+            "سلام 🌷\nحساب شما هنوز نقش نگرفته است. لطفاً با مدیریت مدرسه هماهنگ کنید.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+    await panel(update, f"سلام {u.name} 👋\nنقش شما: {ROLE_NAMES[u.role]}")
+
+
+async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async with SessionLocal() as s:
+        u = (await s.execute(select(User).where(User.telegram_id == update.effective_user.id))).scalar_one_or_none()
+        if u:
+            u.active = False
+            await s.commit()
+    context.user_data.clear()
+    await update.message.reply_text("با موفقیت خارج شدید. برای ورود دوباره /start را بزنید.", reply_markup=ReplyKeyboardRemove())
+
+
+async def show_student(update, u):
+    if update.message.text == "📚 درس‌های من":
+        async with SessionLocal() as s:
+            st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+            if not st or not st.class_id:
+                await update.message.reply_text("هنوز کلاسی برای شما ثبت نشده.")
+            else:
+                rows = (await s.execute(select(Subject).where(Subject.class_id == st.class_id).order_by(Subject.name))).scalars().all()
+                await update.message.reply_text("📚 درس‌های شما:\n" + ("\n".join(f"• {x.name}" for x in rows) or "هنوز درسی ثبت نشده."))
+    elif update.message.text == "📝 تکالیف":
+        async with SessionLocal() as s:
+            st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+            if not st or not st.class_id:
+                await update.message.reply_text("کلاس شما مشخص نیست.")
+                return
+            q = await s.execute(
+                select(Assignment, Subject).join(Subject, Assignment.subject_id == Subject.id)
+                .where(Subject.class_id == st.class_id).order_by(Assignment.id.desc())
+            )
+            data = q.all()
+            if not data:
+                await update.message.reply_text("تکلیفی ثبت نشده است.")
+            else:
+                out = ["📝 تکالیف:"]
+                for a, sub in data:
+                    due = a.due_at.astimezone(TZ).strftime("%Y/%m/%d %H:%M") if a.due_at else "بدون مهلت"
+                    out.append(f"\n📚 {sub.name}\n• {a.title}\n{a.body}\n⏰ {due}")
+                await update.message.reply_text("\n".join(out))
+    elif update.message.text == "📅 برنامه هفتگی":
+        async with SessionLocal() as s:
+            st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+            if not st or not st.class_id:
+                await update.message.reply_text("کلاس شما مشخص نیست.")
+                return
+            q = await s.execute(select(Schedule, Subject).join(Subject, Schedule.subject_id == Subject.id).where(Schedule.class_id == st.class_id))
+            data = q.all()
+            out = ["📅 برنامه هفتگی:"]
+            for sch, sub in data:
+                out.append(f"• {sch.weekday} | {sch.period} | {sub.name}")
+            await update.message.reply_text("\n".join(out) if len(out) > 1 else "برنامه‌ای ثبت نشده.")
+    elif update.message.text == "📝 امتحانات":
+        async with SessionLocal() as s:
+            st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+            if not st or not st.class_id:
+                await update.message.reply_text("کلاس شما مشخص نیست.")
+                return
+            q = await s.execute(select(Exam, Subject).join(Subject, Exam.subject_id == Subject.id).where(Subject.class_id == st.class_id).order_by(Exam.exam_at))
+            data = q.all()
+            out = ["📝 امتحانات:"]
+            for e, sub in data:
+                dt = e.exam_at.astimezone(TZ).strftime("%Y/%m/%d %H:%M") if e.exam_at else "زمان نامشخص"
+                out.append(f"\n📚 {sub.name}\n• {e.title}\n📅 {dt}\n{e.details}")
+            await update.message.reply_text("\n".join(out) if len(out) > 1 else "امتحانی ثبت نشده.")
+    elif update.message.text in ("📢 اطلاعیه‌ها", "🔔 اطلاعیه فردا"):
+        kind = "tomorrow" if update.message.text == "🔔 اطلاعیه فردا" else "announcement"
+        async with SessionLocal() as s:
+            st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+            q = select(Announcement).where(or_(Announcement.class_id == None, Announcement.class_id == (st.class_id if st else -1)), Announcement.kind == kind).order_by(Announcement.id.desc()).limit(30)
+            data = (await s.execute(q)).scalars().all()
+            out = ["🔔 اطلاعیه‌ها:"]
+            for a in data:
+                out.append(f"\n📌 {a.title}\n{a.body}")
+            await update.message.reply_text("\n".join(out) if len(out) > 1 else "اطلاعیه‌ای ثبت نشده.")
+    elif update.message.text == "📖 جزوات":
+        async with SessionLocal() as s:
+            st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+            if not st or not st.class_id:
+                await update.message.reply_text("کلاس شما مشخص نیست.")
+                return
+            q = await s.execute(select(Note, Subject).join(Subject, Note.subject_id == Subject.id).where(Subject.class_id == st.class_id).order_by(Note.id.desc()))
+            data = q.all()
+            if not data:
+                await update.message.reply_text("جزوه‌ای ثبت نشده.")
+            else:
+                for n, sub in data:
+                    await update.message.reply_document(n.file_id, caption=f"📖 {n.title}\n📚 {sub.name}")
+    elif update.message.text == "❓ سؤال":
+        context = update._context
+        context.user_data["state"] = "student_question"
+        await update.message.reply_text("سؤال خود را بنویسید. برای لغو «انصراف» را بزنید.")
+    elif update.message.text == "👤 حساب کاربری":
+        async with SessionLocal() as s:
+            st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+            cls = None
+            if st and st.class_id:
+                cls = (await s.execute(select(ClassRoom).where(ClassRoom.id == st.class_id))).scalar_one_or_none()
+            await update.message.reply_text(f"👤 حساب کاربری\nنام: {u.name}\nنقش: {ROLE_NAMES[u.role]}\nکلاس: {cls.name if cls else 'ثبت نشده'}")
+    else:
+        await update.message.reply_text("برای انتخاب گزینه از دکمه‌های پنل استفاده کنید.", reply_markup=keyboard(STUDENT_MENU))
+
+
+async def allowed_subjects(s, u):
+    q = await s.execute(
+        select(Subject).join(Access, Access.subject_id == Subject.id, isouter=False)
+        .where(Access.assigner_user_id == u.id)
+    )
+    return q.scalars().all()
+
+
+async def show_assigner(update, context, u):
+    t = update.message.text
+    if t == "👨‍🎓 دانش‌آموزان":
+        async with SessionLocal() as s:
+            access = (await s.execute(select(Access).where(Access.assigner_user_id == u.id))).scalars().all()
+            class_ids = {a.class_id for a in access}
+            if not class_ids:
+                await update.message.reply_text("هنوز دسترسی کلاسی برای شما تعریف نشده.")
+                return
+            q = await s.execute(select(Student, User).join(User, Student.user_id == User.id).where(Student.class_id.in_(class_ids)))
+            data = q.all()
+            await update.message.reply_text("👨‍🎓 دانش‌آموزان:\n" + ("\n".join(f"• {user.name} — {user.telegram_id}" for _, user in data) or "دانش‌آموزی نیست."))
+    elif t == "📚 درس‌ها":
+        async with SessionLocal() as s:
+            subs = await allowed_subjects(s, u)
+            await update.message.reply_text("📚 درس‌های در دسترس:\n" + ("\n".join(f"• {x.id}: {x.name}" for x in subs) or "درسی در دسترس نیست."))
+    elif t == "📝 تکالیف":
+        context.user_data["state"] = "assigner_assignment"
+        await update.message.reply_text("فرمت تکلیف:\nنام درس|عنوان|متن|YYYY-MM-DD HH:MM\nبرای بدون مهلت، بخش آخر را خالی بگذارید.")
+    elif t == "📢 ارسال اطلاعیه":
+        context.user_data["state"] = "assigner_announcement"
+        await update.message.reply_text("فرمت اطلاعیه:\nعنوان|متن\nبرای همه کلاس‌های مجاز ارسال می‌شود.")
+    elif t == "📅 برنامه هفتگی":
+        context.user_data["state"] = "assigner_schedule"
+        await update.message.reply_text("فرمت برنامه:\nنام درس|روز|ساعت/زنگ")
+    elif t == "📝 امتحانات":
+        context.user_data["state"] = "assigner_exam"
+        await update.message.reply_text("فرمت امتحان:\nنام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات")
+    elif t == "📖 جزوات":
+        context.user_data["state"] = "assigner_note_title"
+        await update.message.reply_text("نام درس و عنوان جزوه را با | بفرستید: نام درس|عنوان")
+    elif t == "❓ سؤالات":
+        async with SessionLocal() as s:
+            q = await s.execute(select(Question, User).join(User, Question.student_user_id == User.id).where(Question.status == "OPEN").order_by(Question.id.desc()).limit(30))
+            data = q.all()
+            if not data:
+                await update.message.reply_text("سؤال بازی وجود ندارد.")
+            else:
+                await update.message.reply_text("\n".join(f"#{x.id} — {u2.name}\n{x.text}" for x, u2 in data))
+            context.user_data["state"] = "assigner_answer"
+            await update.message.reply_text("برای پاسخ: شماره سؤال|متن پاسخ")
+    elif t == "🔔 اطلاعیه فردا":
+        context.user_data["state"] = "assigner_tomorrow"
+        await update.message.reply_text("فرمت: عنوان|متن|YYYY-MM-DD HH:MM")
+    else:
+        await update.message.reply_text("پنل تعیین‌کننده آماده است.", reply_markup=keyboard(ASSIGNER_MENU))
+
+
+async def show_admin(update, context, u):
+    t = update.message.text
+    if t == "👨‍🎓 مدیریت دانش‌آموزان":
+        context.user_data["state"] = "admin_student"
+        await update.message.reply_text("فرمت افزودن/تغییر دانش‌آموز:\ntelegram_id|نام|نام کلاس\nاگر کاربر وجود نداشته باشد ساخته می‌شود.")
+    elif t == "👤 مدیریت تعیین‌کنندگان":
+        context.user_data["state"] = "admin_assigner"
+        await update.message.reply_text("فرمت افزودن تعیین‌کننده:\ntelegram_id|نام")
+    elif t == "🏫 مدیریت کلاس‌ها":
+        context.user_data["state"] = "admin_class"
+        await update.message.reply_text("فرمت: نام کلاس\nبرای حذف: حذف|نام کلاس")
+    elif t == "📚 مدیریت درس‌ها":
+        context.user_data["state"] = "admin_subject"
+        await update.message.reply_text("فرمت افزودن درس:\nنام درس|نام کلاس|نام تعیین‌کننده اختیاری")
+    elif t == "🔐 مدیریت دسترسی‌ها":
+        context.user_data["state"] = "admin_access"
+        await update.message.reply_text("فرمت: telegram_id تعیین‌کننده|نام کلاس|نام درس\nبا این کار دسترسی تعیین‌کننده ثبت می‌شود.")
+    elif t == "📝 مدیریت تکالیف":
+        context.user_data["state"] = "admin_assignment"
+        await update.message.reply_text("فرمت: نام درس|عنوان|متن|YYYY-MM-DD HH:MM")
+    elif t == "📝 مدیریت امتحانات":
+        context.user_data["state"] = "admin_exam"
+        await update.message.reply_text("فرمت: نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات")
+    elif t == "📅 مدیریت برنامه هفتگی":
+        context.user_data["state"] = "admin_schedule"
+        await update.message.reply_text("فرمت: نام کلاس|نام درس|روز|زنگ")
+    elif t in ("📢 مدیریت اطلاعیه‌ها", "📨 ارسال پیام همگانی"):
+        context.user_data["state"] = "admin_announcement"
+        await update.message.reply_text("فرمت: عنوان|متن|نام کلاس اختیاری\nبرای همه کلاس‌ها، بخش کلاس را خالی بگذارید.")
+    elif t == "🔔 اطلاعیه فردا":
+        context.user_data["state"] = "admin_tomorrow"
+        await update.message.reply_text("فرمت: عنوان|متن|YYYY-MM-DD HH:MM|نام کلاس اختیاری")
+    elif t == "❓ مدیریت سؤالات":
+        async with SessionLocal() as s:
+            data = (await s.execute(select(Question, User).join(User, Question.student_user_id == User.id).order_by(Question.id.desc()).limit(50))).all()
+            await update.message.reply_text("\n\n".join(f"#{q.id} [{q.status}] {usr.name}\n{q.text}\nپاسخ: {q.answer or '---'}" for q, usr in data) or "سؤالی ثبت نشده.")
+    elif t == "👥 مدیریت کاربران":
+        async with SessionLocal() as s:
+            data = (await s.execute(select(User).order_by(User.id.desc()).limit(100))).scalars().all()
+            await update.message.reply_text("\n".join(f"{x.telegram_id} | {x.name} | {ROLE_NAMES.get(x.role,x.role)} | active={x.active}" for x in data))
+    elif t in ("📊 گزارش‌ها", "📋 گزارش فعالیت‌ها", "🕐 تاریخچه تغییرات"):
+        async with SessionLocal() as s:
+            users = await s.scalar(select(User).count()) if False else None
+            logs = (await s.execute(select(ActivityLog).order_by(ActivityLog.id.desc()).limit(30))).scalars().all()
+            await update.message.reply_text(f"📊 آخرین فعالیت‌ها:\n" + ("\n".join(f"{x.created_at.astimezone(TZ).strftime('%m/%d %H:%M')} | {x.action} | {x.details}" for x in logs) or "هنوز فعالیتی ثبت نشده."))
+    elif t == "🗂️ مدیریت فایل‌ها":
+        await update.message.reply_text("فایل‌های جزوات در Telegram به‌صورت file_id نگهداری می‌شوند و نیازی به دیسک Railway ندارند.")
+    elif t == "⚙️ تنظیمات بات":
+        await update.message.reply_text(f"⚙️ تنظیمات فعال\nمنطقه زمانی: {TIMEZONE}\nپایگاه‌داده: {'PostgreSQL' if 'postgres' in DATABASE_URL else 'سایر'}")
+    elif t == "🗄️ مدیریت دیتابیس":
+        async with SessionLocal() as s:
+            await update.message.reply_text("اتصال دیتابیس برقرار است." if await s.scalar(select(1)) == 1 else "خطا در دیتابیس.")
+    elif t == "🔒 تنظیمات امنیتی":
+        await update.message.reply_text("امنیت: توکن فقط از متغیر محیطی خوانده می‌شود؛ نقش‌ها در DB کنترل می‌شوند؛ اطلاعات حساس در GitHub ذخیره نشده است.")
+    elif t == "🔔 ارسال اعلان":
+        context.user_data["state"] = "admin_announcement"
+        await update.message.reply_text("برای اعلان: عنوان|متن|نام کلاس اختیاری")
+    elif t == "👨‍🎓 مدیریت تعیین‌کنندگان":
+        pass
+    else:
+        await update.message.reply_text("پنل مدیریت آماده است.", reply_markup=keyboard(ADMIN_MENU))
+
+
+def parse_dt(value: str) -> datetime | None:
+    value = value.strip()
+    if not value:
+        return None
+    return datetime.strptime(value, "%Y-%m-%d %H:%M").replace(tzinfo=TZ).astimezone(timezone.utc)
+
+
+async def get_class_by_name(s, name):
+    return (await s.execute(select(ClassRoom).where(ClassRoom.name == name.strip()))).scalar_one_or_none()
+
+
+async def get_subject_by_name(s, name):
+    return (await s.execute(select(Subject).where(Subject.name == name.strip()))).scalars().first()
+
+
+async def notify_class(bot, class_id: int | None, text: str, announcement_id: int):
+    async with SessionLocal() as s:
+        q = select(User, Student).join(Student, Student.user_id == User.id).where(User.role == "STUDENT", User.active.is_(True))
+        if class_id is not None:
+            q = q.where(Student.class_id == class_id)
+        rows = (await s.execute(q)).all()
+        for user, _ in rows:
+            d = Delivery(announcement_id=announcement_id, user_id=user.id, status="PENDING")
+            s.add(d)
+            try:
+                await bot.send_message(user.telegram_id, text)
+                d.status = "SENT"
+            except Exception as e:
+                d.status = "FAILED"
+                d.error = str(e)[:1000]
+        await s.commit()
+
+
+async def create_announcement(bot, title, body, class_id, kind, scheduled_at, creator_id):
+    async with SessionLocal() as s:
+        a = Announcement(title=title, body=body, class_id=class_id, kind=kind, scheduled_at=scheduled_at, created_by=creator_id, sent=False)
+        s.add(a)
+        await s.commit()
+        await s.refresh(a)
+        aid = a.id
+    if scheduled_at is None:
+        await notify_class(bot, class_id, f"📢 {title}\n\n{body}", aid)
+        async with SessionLocal() as s:
+            a = await s.get(Announcement, aid)
+            a.sent = True
+            await s.commit()
+    return aid
+
+
+async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now(timezone.utc)
+    async with SessionLocal() as s:
+        data = (await s.execute(select(Announcement).where(Announcement.sent.is_(False), Announcement.scheduled_at.is_not(None), Announcement.scheduled_at <= now))).scalars().all()
+    for a in data:
+        await notify_class(context.bot, a.class_id, f"🔔 {a.title}\n\n{a.body}", a.id)
+        async with SessionLocal() as s:
+            x = await s.get(Announcement, a.id)
+            if x:
+                x.sent = True
+                await s.commit()
+
+
+async def process_state(update, context, u):
+    state = context.user_data.get("state")
+    text = update.message.text.strip()
+    if text == "انصراف":
+        context.user_data.clear()
+        await panel(update, "عملیات لغو شد.")
+        return True
+
+    if state == "student_question":
+        async with SessionLocal() as s:
+            s.add(Question(student_user_id=u.id, text=text))
+            await s.commit()
+        await log_action(u.id, "student_question", text[:200])
+        context.user_data.clear()
+        await update.message.reply_text("سؤال شما ثبت شد و برای تعیین‌کننده/مدیریت ارسال می‌شود.", reply_markup=keyboard(STUDENT_MENU))
+        return True
+
+    if u.role == "ADMIN":
+        try:
+            async with SessionLocal() as s:
+                if state == "admin_class":
+                    parts = text.split("|", 1)
+                    if parts[0] == "حذف" and len(parts) == 2:
+                        c = await get_class_by_name(s, parts[1])
+                        if c:
+                            await s.delete(c)
+                            await s.commit()
+                            await update.message.reply_text("کلاس حذف شد.")
+                        else:
+                            await update.message.reply_text("کلاس پیدا نشد.")
+                    else:
+                        c = ClassRoom(name=text)
+                        s.add(c); await s.commit()
+                        await update.message.reply_text("کلاس اضافه شد.")
+                elif state == "admin_student":
+                    tid, name, clsname = [x.strip() for x in text.split("|", 2)]
+                    tid = int(tid)
+                    target = (await s.execute(select(User).where(User.telegram_id == tid))).scalar_one_or_none()
+                    if not target:
+                        target = User(telegram_id=tid, name=name, role="STUDENT", active=True); s.add(target); await s.flush()
+                    target.name, target.role = name, "STUDENT"
+                    c = await get_class_by_name(s, clsname)
+                    if not c: raise ValueError("کلاس وجود ندارد.")
+                    st = (await s.execute(select(Student).where(Student.user_id == target.id))).scalar_one_or_none()
+                    if not st: s.add(Student(user_id=target.id, class_id=c.id))
+                    else: st.class_id = c.id
+                    await s.commit(); await update.message.reply_text("دانش‌آموز ثبت/به‌روزرسانی شد.")
+                elif state == "admin_assigner":
+                    tid, name = [x.strip() for x in text.split("|", 1)]
+                    tid = int(tid)
+                    target = (await s.execute(select(User).where(User.telegram_id == tid))).scalar_one_or_none()
+                    if not target:
+                        target = User(telegram_id=tid, name=name, role="ASSIGNER", active=True); s.add(target)
+                    else:
+                        target.name, target.role, target.active = name, "ASSIGNER", True
+                    await s.commit(); await update.message.reply_text("تعیین‌کننده ثبت شد.")
+                elif state == "admin_subject":
+                    name, clsname, *rest = [x.strip() for x in text.split("|")]
+                    c = await get_class_by_name(s, clsname)
+                    if not c: raise ValueError("کلاس وجود ندارد.")
+                    sub = Subject(name=name, class_id=c.id, teacher_name=(rest[0] if rest else ""))
+                    s.add(sub); await s.commit(); await update.message.reply_text("درس ثبت شد.")
+                elif state == "admin_access":
+                    tid, clsname, subname = [x.strip() for x in text.split("|", 2)]
+                    au = (await s.execute(select(User).where(User.telegram_id == int(tid), User.role == "ASSIGNER"))).scalar_one_or_none()
+                    c = await get_class_by_name(s, clsname)
+                    sub = (await s.execute(select(Subject).where(Subject.name == subname, Subject.class_id == c.id))).scalar_one_or_none() if c else None
+                    if not au or not c or not sub: raise ValueError("تعیین‌کننده/کلاس/درس پیدا نشد.")
+                    s.add(Access(assigner_user_id=au.id, class_id=c.id, subject_id=sub.id)); await s.commit(); await update.message.reply_text("دسترسی ثبت شد.")
+                elif state in ("admin_assignment", "admin_exam"):
+                    p = [x.strip() for x in text.split("|", 3)]
+                    sub = await get_subject_by_name(s, p[0])
+                    if not sub: raise ValueError("درس پیدا نشد.")
+                    if state == "admin_assignment":
+                        a = Assignment(subject_id=sub.id, title=p[1], body=p[2], due_at=parse_dt(p[3]) if len(p)>3 else None, created_by=u.id); s.add(a)
+                        await s.commit(); await update.message.reply_text("تکلیف ثبت شد.")
+                    else:
+                        e = Exam(subject_id=sub.id, title=p[1], exam_at=parse_dt(p[2]) if len(p)>2 else None, details=p[3] if len(p)>3 else "", created_by=u.id); s.add(e)
+                        await s.commit(); await update.message.reply_text("امتحان ثبت شد.")
+                elif state == "admin_schedule":
+                    clsname, subname, weekday, period = [x.strip() for x in text.split("|", 3)]
+                    c = await get_class_by_name(s, clsname); sub = await get_subject_by_name(s, subname)
+                    if not c or not sub: raise ValueError("کلاس یا درس پیدا نشد.")
+                    s.add(Schedule(class_id=c.id, subject_id=sub.id, weekday=weekday, period=period)); await s.commit(); await update.message.reply_text("برنامه ثبت شد.")
+                elif state in ("admin_announcement", "admin_tomorrow"):
+                    p = [x.strip() for x in text.split("|", 3)]
+                    title, body = p[0], p[1]
+                    if state == "admin_tomorrow":
+                        when = parse_dt(p[2])
+                        cls = await get_class_by_name(s, p[3]) if len(p)>3 and p[3] else None
+                        cid = cls.id if cls else None
+                        kind = "tomorrow"
+                    else:
+                        when = None
+                        cls = await get_class_by_name(s, p[2]) if len(p)>2 and p[2] else None
+                        cid = cls.id if cls else None
+                        kind = "announcement"
+                else:
+                    await update.message.reply_text("این بخش در حال حاضر فقط نمایش/تنظیمات است.")
+                    context.user_data.clear()
+                    return True
+            if state in ("admin_announcement", "admin_tomorrow"):
+                await create_announcement(context.bot, title, body, cid, kind, when, u.id)
+                await update.message.reply_text("اطلاعیه ثبت شد.")
+        except Exception as e:
+            log.exception("admin state")
+            await update.message.reply_text(f"❌ خطا: {str(e)}")
+        context.user_data.clear()
+        return True
+
+    if u.role == "ASSIGNER":
+        try:
+            async with SessionLocal() as s:
+                subs = await allowed_subjects(s, u)
+                if state == "assigner_assignment":
+                    p = [x.strip() for x in text.split("|", 3)]
+                    sub = next((x for x in subs if x.name == p[0]), None)
+                    if not sub: raise ValueError("این درس برای شما مجاز نیست.")
+                    a = Assignment(subject_id=sub.id, title=p[1], body=p[2], due_at=parse_dt(p[3]) if len(p)>3 else None, created_by=u.id); s.add(a); await s.commit()
+                    await update.message.reply_text("تکلیف ثبت شد.")
+                elif state == "assigner_exam":
+                    p = [x.strip() for x in text.split("|", 3)]
+                    sub = next((x for x in subs if x.name == p[0]), None)
+                    if not sub: raise ValueError("این درس برای شما مجاز نیست.")
+                    e = Exam(subject_id=sub.id, title=p[1], exam_at=parse_dt(p[2]), details=p[3] if len(p)>3 else "", created_by=u.id); s.add(e); await s.commit()
+                    await update.message.reply_text("امتحان ثبت شد.")
+                elif state == "assigner_schedule":
+                    subname, weekday, period = [x.strip() for x in text.split("|", 2)]
+                    sub = next((x for x in subs if x.name == subname), None)
+                    if not sub: raise ValueError("این درس برای شما مجاز نیست.")
+                    acc = (await s.execute(select(Access).where(Access.assigner_user_id == u.id, Access.subject_id == sub.id))).scalars().first()
+                    if not acc: raise ValueError("دسترسی کلاس پیدا نشد.")
+                    s.add(Schedule(class_id=acc.class_id, subject_id=sub.id, weekday=weekday, period=period)); await s.commit(); await update.message.reply_text("برنامه ثبت شد.")
+                elif state == "assigner_announcement":
+                    title, body = [x.strip() for x in text.split("|", 1)]
+                    accesses = (await s.execute(select(Access).where(Access.assigner_user_id == u.id))).scalars().all()
+                    class_ids = {a.class_id for a in accesses}
+                    for cid in class_ids:
+                        await s.flush()
+                        a = Announcement(title=title, body=body, class_id=cid, kind="announcement", created_by=u.id)
+                        s.add(a)
+                    await s.commit()
+                    ids = (await s.execute(select(Announcement.id).where(Announcement.created_by == u.id).order_by(Announcement.id.desc()).limit(len(class_ids)))).scalars().all()
+                    for aid, cid in zip(ids, class_ids):
+                        await notify_class(context.bot, cid, f"📢 {title}\n\n{body}", aid)
+                        async with SessionLocal() as ss:
+                            x = await ss.get(Announcement, aid)
+                            if x: x.sent=True; await ss.commit()
+                    await update.message.reply_text("اطلاعیه برای کلاس‌های مجاز ارسال شد.")
+                elif state == "assigner_tomorrow":
+                    title, body, when = [x.strip() for x in text.split("|", 2)]
+                    accesses = (await s.execute(select(Access).where(Access.assigner_user_id == u.id))).scalars().all()
+                    for cid in {a.class_id for a in accesses}:
+                        s.add(Announcement(title=title, body=body, class_id=cid, kind="tomorrow", scheduled_at=parse_dt(when), created_by=u.id))
+                    await s.commit(); await update.message.reply_text("اطلاعیه فردا زمان‌بندی شد.")
+                elif state == "assigner_answer":
+                    qid, answer = [x.strip() for x in text.split("|", 1)]
+                    q = await s.get(Question, int(qid))
+                    if not q: raise ValueError("سؤال پیدا نشد.")
+                    q.answer, q.status = answer, "ANSWERED"; await s.commit()
+                    student = await s.get(User, q.student_user_id)
+                    await context.bot.send_message(student.telegram_id, f"💬 پاسخ سؤال #{qid}:\n{answer}")
+                    await update.message.reply_text("پاسخ ارسال شد.")
+                elif state == "assigner_note_title":
+                    context.user_data["note_meta"] = [x.strip() for x in text.split("|", 1)]
+                    context.user_data["state"] = "assigner_note_file"
+                    await update.message.reply_text("حالا فایل جزوه را ارسال کنید.")
+                    return True
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا: {e}")
+        context.user_data.clear()
+        return True
+
+    return False
+
+
+async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+    u = await ensure_user(update.effective_user.id, update.effective_user.full_name or "")
+    if not u.active and update.message.text != "/start":
+        await update.message.reply_text("جلسه شما بسته است. /start را بزنید.")
+        return
+    if update.message.text == "🚪 خروج":
+        await logout(update, context); return
+    if await process_state(update, context, u):
+        return
+    if u.role == "STUDENT":
+        await show_student(update, u)
+    elif u.role == "ASSIGNER":
+        await show_assigner(update, context, u)
+    elif u.role == "ADMIN":
+        await show_admin(update, context, u)
+    else:
+        await update.message.reply_text("نقش شما هنوز تأیید نشده است.")
+
+
+async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = await db_user(update.effective_user.id)
+    if not u or u.role not in ("ASSIGNER", "ADMIN"):
+        return
+    if context.user_data.get("state") != "assigner_note_file":
+        return
+    meta = context.user_data.get("note_meta", [])
+    if len(meta) != 2:
+        await update.message.reply_text("اطلاعات جزوه ناقص است.")
+        context.user_data.clear(); return
+    async with SessionLocal() as s:
+        sub = await get_subject_by_name(s, meta[0])
+        if not sub: 
+            await update.message.reply_text("درس پیدا نشد."); return
+        if u.role == "ASSIGNER":
+            subs = await allowed_subjects(s, u)
+            if sub.id not in {x.id for x in subs}:
+                await update.message.reply_text("به این درس دسترسی ندارید."); return
+        doc = update.message.document
+        s.add(Note(subject_id=sub.id, title=meta[1], file_id=doc.file_id, file_name=doc.file_name or "", created_by=u.id))
+        await s.commit()
+    context.user_data.clear()
+    await update.message.reply_text("📖 جزوه ثبت شد.", reply_markup=keyboard(ASSIGNER_MENU if u.role=="ASSIGNER" else ADMIN_MENU))
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    log.exception("Unhandled bot error", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text("❌ خطای غیرمنتظره رخ داد. وضعیت شما حفظ شد؛ دوباره تلاش کنید.")
+        except Exception:
+            pass
+
+
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    if ADMIN_TELEGRAM_ID:
+        async with SessionLocal() as s:
+            tid = int(ADMIN_TELEGRAM_ID)
+            u = (await s.execute(select(User).where(User.telegram_id == tid))).scalar_one_or_none()
+            if not u:
+                s.add(User(telegram_id=tid, name="مدیریت", role="ADMIN", active=True))
+            else:
+                u.role, u.active = "ADMIN", True
+            await s.commit()
+
+
+async def post_init(app: Application):
+    await init_db()
+    if app.job_queue:
+        app.job_queue.run_repeating(scheduled_job, interval=60, first=10)
+    log.info("School bot initialized")
+
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Document.ALL, document_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
+    app.add_error_handler(error_handler)
+    log.info("Polling started")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
+
+
+if __name__ == "__main__":
+    main()
