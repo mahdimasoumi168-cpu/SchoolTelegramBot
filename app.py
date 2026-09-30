@@ -431,6 +431,38 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "auth_assigner_username"
         await reply_long(query.message, "👤 ورود تعیین‌کننده\n\nابتدا نام کاربری را ارسال کنید:")
         return
+
+    if data.startswith("wizard:"):
+        parts = data.split(":")
+        if len(parts) != 4:
+            return
+        _, flow_key, field_key, object_id_text = parts
+        if flow_key not in ("admin_flow", "assigner_flow") or field_key not in ("class", "subject"):
+            return
+        u = await db_user(query.from_user.id)
+        if not u or not u.active or u.role not in ("ADMIN", "ASSIGNER"):
+            await reply_long(query.message, "حساب شما فعال نیست.")
+            return
+        flow = context.user_data.get(flow_key)
+        if not flow or flow["i"] >= len(flow["fields"]) or flow["fields"][flow["i"]][0] != field_key:
+            await reply_long(query.message, "این انتخاب دیگر معتبر نیست؛ عملیات را دوباره شروع کنید.")
+            return
+        try:
+            object_id = int(object_id_text)
+        except ValueError:
+            await reply_long(query.message, "انتخاب نامعتبر است.")
+            return
+        async with SessionLocal() as s:
+            options = await wizard_choice_options(s, u, flow, field_key)
+            allowed = {oid: name for oid, name in options}
+            if object_id not in allowed:
+                await reply_long(query.message, "❌ این گزینه برای حساب شما مجاز نیست.")
+                return
+            flow["values"].append(allowed[object_id])
+            flow["i"] += 1
+        await advance_wizard_field(callback_update(query, query.message.text or ""), context, u, flow_key)
+        return
+
     if not data.startswith("menu:"):
         return
     text = data[5:]
@@ -442,8 +474,8 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await logout(callback_update(query, text), context)
         return
     if u.role == "STUDENT" and text == "❓ سؤال":
-        context.user_data["state"] = "student_question_subject"
-        await reply_long(query.message, "❓ سؤال\n\nنام درس را ارسال کنید؛ اگر سؤال عمومی است «عمومی» بنویسید. سپس متن سؤال را در پیام بعدی ارسال کنید. برای لغو «انصراف».")
+        context.user_data["state"] = "student_question_text"
+        await reply_long(query.message, "❓ سؤال\n\nمتن سؤال را در پیام بعدی ارسال کنید. نیازی به انتخاب درس یا کلاس نیست؛ سامانه اطلاعات حساب شما را خودش در نظر می‌گیرد. برای لغو «انصراف».")
         return
     proxy = callback_update(query, text)
     if u.role == "STUDENT":
@@ -542,18 +574,26 @@ async def show_student(update, u):
             q = await s.execute(select(Note, Subject).join(Subject, Note.subject_id == Subject.id).where(Subject.class_id == st.class_id).order_by(Note.id.desc()))
             data = q.all()
             if not data:
-                await reply_long(update.message, "جزوه‌ای ثبت نشده.")
+                await reply_long(update.message, "📖 جزوه‌ای برای کلاس شما پیدا نشد.")
             else:
+                lines = ["📖 جزوات کلاس شما:"]
                 for n, sub in data:
-                    await update.message.reply_document(n.file_id, caption=f"📖 {n.title}\n📚 {sub.name}")
+                    lines.append(f"• #{n.id} — {n.title} — {sub.name} — {n.file_name or 'PDF'}")
+                await reply_long(update.message, "\n".join(lines))
+                for n, sub in data:
+                    try:
+                        await update.message.reply_document(n.file_id, caption=f"📖 {n.title}\n📚 {sub.name}")
+                    except Exception:
+                        log.exception("student note delivery failed for note %s", n.id)
+                        await reply_long(update.message, f"⚠️ فایل جزوه #{n.id} ثبت شده است اما ارسال فایل ناموفق بود.")
     elif update.message.text == "❓ سؤال":
         # The normal message handler already provides the real context.
         context = getattr(update, "_context", None)
         if context is None:
             # Callback flow is handled in menu_callback before reaching here.
             return
-        context.user_data["state"] = "student_question"
-        await reply_long(update.message, "❓ سؤال\n\nنام درس یا «عمومی» را در یک پیام بفرستید؛ سپس متن سؤال را در پیام بعدی ارسال کنید. برای لغو «انصراف».")
+        context.user_data["state"] = "student_question_text"
+        await reply_long(update.message, "❓ سؤال\n\nمتن سؤال را در پیام بعدی ارسال کنید. نیازی به انتخاب درس یا کلاس نیست. برای لغو «انصراف».")
     elif update.message.text == "👤 حساب کاربری":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
@@ -573,6 +613,93 @@ async def allowed_subjects(s, u):
         .order_by(Subject.name)
     )
     return q.scalars().all()
+
+
+
+
+async def wizard_choice_options(s, u, flow, key):
+    """Return existing class/subject choices without asking the user to type them."""
+    if key == "class":
+        if u.role == "ADMIN":
+            rows = (await s.execute(select(ClassRoom).order_by(ClassRoom.name))).scalars().all()
+        elif u.role == "ASSIGNER":
+            rows = (await s.execute(
+                select(ClassRoom).join(Access, Access.class_id == ClassRoom.id)
+                .where(Access.assigner_user_id == u.id)
+                .distinct().order_by(ClassRoom.name)
+            )).scalars().all()
+        elif u.role == "STUDENT":
+            st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+            rows = [await s.get(ClassRoom, st.class_id)] if st and st.class_id else []
+        else:
+            rows = []
+        return [(x.id, x.name) for x in rows if x]
+
+    if key == "subject":
+        if u.role == "ADMIN":
+            class_name = None
+            fields = flow.get("fields", [])
+            values = flow.get("values", [])
+            for idx, (field_key, _) in enumerate(fields):
+                if field_key == "class" and idx < len(values):
+                    class_name = values[idx].strip()
+                    break
+            if class_name:
+                cls = await get_class_by_name(s, class_name)
+                if cls:
+                    rows = (await s.execute(
+                        select(Subject).where(Subject.class_id == cls.id).order_by(Subject.name)
+                    )).scalars().all()
+                else:
+                    rows = []
+            else:
+                rows = (await s.execute(select(Subject).order_by(Subject.name))).scalars().all()
+        elif u.role == "ASSIGNER":
+            rows = await allowed_subjects(s, u)
+        elif u.role == "STUDENT":
+            st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+            rows = []
+            if st and st.class_id:
+                rows = (await s.execute(
+                    select(Subject).where(Subject.class_id == st.class_id).order_by(Subject.name)
+                )).scalars().all()
+        else:
+            rows = []
+        return [(x.id, x.name) for x in rows]
+
+    return []
+
+async def advance_wizard_field(update, context, u, flow_key):
+    """Advance a CRUD wizard. Class/subject fields use inline choices, never typed input."""
+    flow = context.user_data.get(flow_key)
+    if not flow:
+        return
+    fields = flow["fields"]
+    while flow["i"] < len(fields):
+        key, prompt = fields[flow["i"]]
+        if key not in ("class", "subject"):
+            await reply_long(update.message, prompt)
+            return
+        async with SessionLocal() as s:
+            options = await wizard_choice_options(s, u, flow, key)
+        if not options:
+            await reply_long(update.message, "❌ گزینه‌ای برای انتخاب پیدا نشد. ابتدا اطلاعات پایه را در مدیریت ثبت کنید.")
+            return
+        if len(options) == 1:
+            flow["values"].append(options[0][1])
+            flow["i"] += 1
+            continue
+        label = "کلاس" if key == "class" else "درس"
+        buttons = [
+            [InlineKeyboardButton(name, callback_data=f"wizard:{flow_key}:{key}:{oid}")]
+            for oid, name in options
+        ]
+        await reply_long(update.message, f"لطفاً {label} را از فهرست انتخاب کنید:", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    # All fields are collected; let process_state execute the existing CRUD path.
+    context.user_data["_wizard_callback_ready"] = True
+    await process_state(update, context, u)
 
 
 async def show_assigner(update, context, u):
@@ -604,8 +731,24 @@ async def show_assigner(update, context, u):
         context.user_data["state"] = "assigner_exam"
         await reply_long(update.message, "📝 مدیریت امتحانات\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید.")
     elif t == "📖 جزوات":
+        async with SessionLocal() as s:
+            subs = await allowed_subjects(s, u)
+            subject_ids = [x.id for x in subs]
+            if subject_ids:
+                rows = (await s.execute(
+                    select(Note, Subject).join(Subject, Note.subject_id == Subject.id)
+                    .where(Note.subject_id.in_(subject_ids))
+                    .order_by(Note.id.desc()).limit(50)
+                )).all()
+            else:
+                rows = []
+            preview = ["📖 جزوات در دسترس:"]
+            preview.extend(f"• #{n.id} — {n.title} — {sub.name} — {n.file_name or 'PDF'}" for n, sub in rows)
+            if not rows:
+                preview.append("هنوز جزوه‌ای برای دسترسی شما ثبت نشده است.")
+            await reply_long(update.message, "\n".join(preview))
         context.user_data["state"] = "assigner_note_title"
-        await reply_long(update.message, "📖 مدیریت جزوات\n\nابتدا «افزودن» یا «حذف» را ارسال کنید. در حالت افزودن، نام درس و عنوان جداگانه گرفته می‌شود و سپس فایل PDF را ارسال می‌کنید.")
+        await reply_long(update.message, "حالا «افزودن» یا «حذف» را ارسال کنید. برای افزودن، درس از فهرست دسترسی شما انتخاب می‌شود و عنوان را جداگانه می‌گیرم.")
     elif t == "❓ سؤالات":
         async with SessionLocal() as s:
             allowed_ids = (await s.execute(select(Access.subject_id).where(Access.assigner_user_id == u.id, Access.subject_id.is_not(None)))).scalars().all()
@@ -653,8 +796,18 @@ async def show_admin(update, context, u):
         context.user_data["state"] = "admin_exam"
         await reply_long(update.message, "📝 مدیریت امتحانات\n\nابتدا عملیات را بفرستید؛ سپس هر فیلد را در پیام جداگانه دریافت می‌کنم.")
     elif t == "📖 مدیریت جزوات":
+        async with SessionLocal() as s:
+            rows = (await s.execute(
+                select(Note, Subject).join(Subject, Note.subject_id == Subject.id)
+                .order_by(Note.id.desc()).limit(50)
+            )).all()
+            preview = ["📖 فهرست جزوات:"]
+            preview.extend(f"• #{n.id} — {n.title} — {sub.name} — {n.file_name or 'PDF'}" for n, sub in rows)
+            if not rows:
+                preview.append("هنوز جزوه‌ای ثبت نشده است.")
+            await reply_long(update.message, "\n".join(preview))
         context.user_data["state"] = "admin_note_title"
-        await reply_long(update.message, "📖 مدیریت جزوات\\n\\nابتدا فقط نوع عملیات را ارسال کنید: افزودن / حذف\\nدر حالت افزودن، نام درس و عنوان جداگانه گرفته می‌شود و سپس فایل PDF را ارسال می‌کنید.")
+        await reply_long(update.message, "حالا «افزودن» یا «حذف» را ارسال کنید. برای افزودن، درس از فهرست موجود انتخاب می‌شود و عنوان را جداگانه می‌گیرم.")
     elif t == "📅 مدیریت برنامه هفتگی":
         context.user_data["state"] = "admin_schedule"
         await reply_long(update.message, "📅 مدیریت برنامه هفتگی\n\nابتدا عملیات را بفرستید؛ سپس کلاس، درس، روز و زنگ را جداگانه دریافت می‌کنم. افزودن، رکوردهای قبلی را حذف نمی‌کند.")
@@ -980,40 +1133,18 @@ async def process_state(update, context, u):
         return True
 
 
-    if state == "student_question_subject":
-        subject_name = text.strip()
-        if not subject_name:
-            await reply_long(update.message, "نام درس نمی‌تواند خالی باشد. نام درس یا «عمومی» را ارسال کنید:")
-            return True
-        context.user_data["question_subject"] = subject_name
-        context.user_data["state"] = "student_question_text"
-        await reply_long(update.message, "حالا متن سؤال را در پیام بعدی ارسال کنید:")
-        return True
-
     if state == "student_question_text":
         question_id = None
-        subject_name = context.user_data.get("question_subject", "").strip()
         question_text = text.strip()
         if not question_text:
             await reply_long(update.message, "متن سؤال خالی است. دوباره ارسال کنید یا «انصراف» را بزنید.")
             return True
         try:
             async with SessionLocal() as s:
+                # Questions no longer ask the student to choose a class or subject.
+                # The question is stored as general and is routed to active determiners/management.
                 subject_id = None
-                if subject_name and norm_name(subject_name) != "عمومی":
-                    st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
-                    if not st or not st.class_id:
-                        raise ValueError("کلاس شما مشخص نیست.")
-                    subjects = (await s.execute(
-                        select(Subject).where(Subject.class_id == st.class_id)
-                    )).scalars().all()
-                    matches = [x for x in subjects if norm_name(x.name) == norm_name(subject_name)]
-                    if len(matches) > 1:
-                        raise ValueError("نام این درس تکراری است؛ لطفاً نام درس را دقیق‌تر وارد کنید.")
-                    if not matches:
-                        raise ValueError("این درس در کلاس شما پیدا نشد.")
-                    subject_id = matches[0].id
-                q = Question(student_user_id=u.id, subject_id=subject_id, text=question_text)
+                q = Question(student_user_id=u.id, subject_id=None, text=question_text)
                 s.add(q)
                 await s.commit()
                 await s.refresh(q)
@@ -1147,17 +1278,20 @@ async def process_state(update, context, u):
                 fields = admin_wizard_specs[state][text]
                 context.user_data["admin_flow"]["fields"] = fields
                 if fields:
-                    await reply_long(update.message, fields[0][1])
+                    await advance_wizard_field(update, context, u, "admin_flow")
+                else:
+                    await advance_wizard_field(update, context, u, "admin_flow")
                 return True
             await reply_long(update.message, "عملیات را جداگانه ارسال کنید: «افزودن» یا «ویرایش» یا «حذف».")
             return True
         fields = flow["fields"]
         i = flow["i"]
-        flow["values"].append(text)
-        i += 1
+        if not context.user_data.pop("_wizard_callback_ready", False):
+            flow["values"].append(text)
+            i += 1
         if i < len(fields):
             flow["i"] = i
-            await reply_long(update.message, fields[i][1])
+            await advance_wizard_field(update, context, u, "admin_flow")
             return True
         action = flow["action"]
         vals = flow["values"]
@@ -1582,15 +1716,16 @@ async def process_state(update, context, u):
         if not flow:
             if text in assigner_wizard_specs[state]:
                 context.user_data["assigner_flow"] = {"action": text, "i": 0, "values": [], "fields": assigner_wizard_specs[state][text]}
-                await reply_long(update.message, assigner_wizard_specs[state][text][0][1])
+                await advance_wizard_field(update, context, u, "assigner_flow")
                 return True
             await reply_long(update.message, "عملیات را جداگانه ارسال کنید: «افزودن»، «ویرایش»، «حذف» یا برای سؤال «پاسخ».")
             return True
         fields = flow["fields"]
-        flow["values"].append(text)
-        flow["i"] += 1
+        if not context.user_data.pop("_wizard_callback_ready", False):
+            flow["values"].append(text)
+            flow["i"] += 1
         if flow["i"] < len(fields):
-            await reply_long(update.message, fields[flow["i"]][1])
+            await advance_wizard_field(update, context, u, "assigner_flow")
             return True
         action = flow["action"]
         vals = flow["values"]
