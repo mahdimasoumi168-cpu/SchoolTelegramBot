@@ -955,11 +955,27 @@ async def process_state(update, context, u):
                 await s.refresh(q)
                 question_id = q.id
             await log_action(u.id, "student_question", question_text[:200])
-            # Notify administrators and active determiners immediately; the question remains in DB even if Telegram delivery fails.
+            # Notify administrators and only determiners who are authorized for the selected subject.
+            # General questions (subject_id is NULL) are visible to all active determiners.
             async with SessionLocal() as s:
                 recipients = (await s.execute(
-                    select(User).where(User.role.in_(("ADMIN", "ASSIGNER")), User.active.is_(True))
+                    select(User).where(User.role == "ADMIN", User.active.is_(True))
                 )).scalars().all()
+                if subject_id is None:
+                    recipients += list((await s.execute(
+                        select(User).join(Access, Access.assigner_user_id == User.id)
+                        .where(User.role == "ASSIGNER", User.active.is_(True))
+                        .distinct()
+                    )).scalars().all())
+                else:
+                    recipients += list((await s.execute(
+                        select(User).join(Access, Access.assigner_user_id == User.id)
+                        .where(
+                            User.role == "ASSIGNER",
+                            User.active.is_(True),
+                            Access.subject_id == subject_id,
+                        ).distinct()
+                    )).scalars().all())
             semaphore = asyncio.Semaphore(10)
 
             async def notify_recipient(recipient):
