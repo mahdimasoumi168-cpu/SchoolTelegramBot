@@ -267,6 +267,19 @@ def keyboard(rows):
     )
 
 
+async def reply_long(message, text: str, **kwargs):
+    """Send text safely within Telegram's 4096-character message limit."""
+    text = str(text or "")
+    if not text:
+        return await message.reply_text("", **kwargs)
+    chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)]
+    for i, chunk in enumerate(chunks):
+        # Reply markup is useful on the final chunk; attaching it to every
+        # chunk can create noisy duplicate keyboards.
+        options = kwargs if i == len(chunks) - 1 else {k: v for k, v in kwargs.items() if k != "reply_markup"}
+        await message.reply_text(chunk, **options)
+
+
 class _CallbackMessage:
     def __init__(self, message, text):
         self._message = message
@@ -441,7 +454,7 @@ async def show_student(update, u):
                 for a, sub in data:
                     due = a.due_at.astimezone(TZ).strftime("%Y/%m/%d %H:%M") if a.due_at else "بدون مهلت"
                     out.append(f"\n📚 {sub.name}\n• {a.title}\n{a.body}\n⏰ {due}")
-                await update.message.reply_text("\n".join(out))
+                await reply_long(update.message, "\n".join(out))
     elif update.message.text == "📅 برنامه هفتگی":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
