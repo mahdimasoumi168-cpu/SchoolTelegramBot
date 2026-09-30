@@ -1106,13 +1106,16 @@ async def process_state(update, context, u):
             if action == "حذف":
                 async with SessionLocal() as s2:
                     n=await s2.get(Note,int(vals[0]))
-                    if not n: raise ValueError("جزوه پیدا نشد.")
+                    if not n:
+                        await update.message.reply_text("❌ جزوه پیدا نشد.")
+                        context.user_data.clear()
+                        return True
                     await s2.delete(n); await s2.commit()
                 context.user_data.clear()
                 await update.message.reply_text("✅ جزوه حذف شد.")
                 return True
         elif state == "admin_announcement":
-            text = "|".join(vals)
+            text = action + "|" + "|".join(vals)
         elif state == "admin_tomorrow":
             text = action + "|" + "|".join(vals)
         elif state == "admin_questions":
