@@ -437,6 +437,12 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         u = (await s.execute(select(User).where(User.telegram_id == update.effective_user.id))).scalar_one_or_none()
         if u:
             u.active = False
+            # Release the Telegram binding on explicit logout so the same
+            # Telegram account can later log into another provisioned account.
+            # Keep the admin binding because ADMIN_TELEGRAM_ID is the canonical
+            # identity for the administrator.
+            if u.role != "ADMIN":
+                u.telegram_id = None
             await s.commit()
     context.user_data.clear()
     await reply_long(update.message, "با موفقیت خارج شدید. برای ورود دوباره /start را بزنید.", reply_markup=ReplyKeyboardRemove())
