@@ -287,11 +287,11 @@ async def send_long(bot, chat_id: int, text: str, **kwargs):
     """Send bot-initiated text safely within Telegram's 4096-character limit."""
     text = str(text or "")
     if not text:
-        return await send_long(bot, chat_id, "", **kwargs)
+        return await bot.send_message(chat_id, "", **kwargs)
     chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)]
     for i, chunk in enumerate(chunks):
         options = kwargs if i == len(chunks) - 1 else {k: v for k, v in kwargs.items() if k != "reply_markup"}
-        await send_long(bot, chat_id, chunk, **options)
+        await bot.send_message(chat_id, chunk, **options)
 
 
 class _CallbackMessage:
