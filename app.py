@@ -743,6 +743,39 @@ async def panel_inquiry_text(s, u, menu_text):
     if u.role == "ADMIN" and menu_text == "📅 مدیریت برنامه هفتگی":
         rows = (await s.execute(select(Schedule, Subject, ClassRoom).join(Subject, Schedule.subject_id == Subject.id).join(ClassRoom, Schedule.class_id == ClassRoom.id).order_by(Schedule.id.desc()).limit(100))).all()
         return "📅 برنامه‌های موجود:\n" + ("\n".join(f"#{sch.id} | {cls.name} | {sch.weekday} | {sch.period} | 📚 {sub.name}" for sch, sub, cls in rows) or "برنامه‌ای پیدا نشد.")
+    if u.role == "ADMIN" and menu_text == "👨‍🎓 مدیریت دانش‌آموزان":
+        rows = (await s.execute(select(Student, User, ClassRoom).join(User, Student.user_id == User.id).join(ClassRoom, Student.class_id == ClassRoom.id, isouter=True).order_by(Student.id.desc()).limit(100))).all()
+        return "👨‍🎓 دانش‌آموزان موجود:\n" + ("\n".join(f"#{st.id} | {usr.name} | کد: {st.school_code} | کلاس: {cls.name if cls else 'ثبت نشده'}" for st, usr, cls in rows) or "دانش‌آموزی پیدا نشد.")
+    if u.role == "ADMIN" and menu_text == "👤 مدیریت تعیین‌کنندگان":
+        rows = (await s.execute(select(User).where(User.role == "ASSIGNER").order_by(User.id.desc()).limit(100))).scalars().all()
+        return "👤 تعیین‌کنندگان موجود:\n" + ("\n".join(f"#{x.id} | {x.name} | {x.login_username or 'بدون نام کاربری'} | {'فعال' if x.active else 'غیرفعال'}" for x in rows) or "تعیین‌کننده‌ای پیدا نشد.")
+    if u.role == "ADMIN" and menu_text == "🏫 مدیریت کلاس‌ها":
+        rows = (await s.execute(select(ClassRoom).order_by(ClassRoom.id))).scalars().all()
+        return "🏫 کلاس‌های موجود:\n" + ("\n".join(f"#{x.id} | {x.name}" for x in rows) or "کلاسی پیدا نشد.")
+    if u.role == "ADMIN" and menu_text == "📚 مدیریت درس‌ها":
+        rows = (await s.execute(select(Subject, ClassRoom).join(ClassRoom, Subject.class_id == ClassRoom.id).order_by(Subject.id.desc()).limit(100))).all()
+        return "📚 درس‌های موجود:\n" + ("\n".join(f"#{sub.id} | {sub.name} | کلاس: {cls.name}" for sub, cls in rows) or "درسی پیدا نشد.")
+    if u.role == "ADMIN" and menu_text == "🔐 مدیریت دسترسی‌ها":
+        rows = (await s.execute(select(Access, User, ClassRoom, Subject).join(User, Access.assigner_user_id == User.id).join(ClassRoom, Access.class_id == ClassRoom.id).join(Subject, Access.subject_id == Subject.id, isouter=True).order_by(Access.id.desc()).limit(100))).all()
+        return "🔐 دسترسی‌های موجود:\n" + ("\n".join(f"#{a.id} | {usr.name} | کلاس: {cls.name} | درس: {sub.name if sub else 'همه'}" for a, usr, cls, sub in rows) or "دسترسی‌ای پیدا نشد.")
+    if u.role == "ADMIN" and menu_text == "📖 مدیریت جزوات":
+        rows = (await s.execute(select(Note, Subject).join(Subject, Note.subject_id == Subject.id).order_by(Note.id.desc()).limit(100))).all()
+        return "📖 جزوات موجود:\n" + ("\n".join(f"#{n.id} | {n.title} | {sub.name} | {n.file_name or 'PDF'}" for n, sub in rows) or "جزوه‌ای ثبت نشده.")
+    if u.role == "ADMIN" and menu_text in ("📢 مدیریت اطلاعیه‌ها", "📨 ارسال پیام همگانی", "🔔 ارسال اعلان"):
+        rows = (await s.execute(select(Announcement).where(Announcement.kind == "announcement").order_by(Announcement.id.desc()).limit(50))).scalars().all()
+        return "📢 اطلاعیه‌های موجود:\n" + ("\n\n".join(f"#{a.id} | {a.title}\n{a.body}" for a in rows) or "اطلاعیه‌ای ثبت نشده.")
+    if u.role == "ADMIN" and menu_text == "🔔 اطلاعیه فردا":
+        rows = (await s.execute(select(Announcement).where(Announcement.kind == "tomorrow").order_by(Announcement.id.desc()).limit(50))).scalars().all()
+        return "🔔 اطلاعیه‌های فردا:\n" + ("\n\n".join(f"#{a.id} | {a.title}\n{a.body}" for a in rows) or "اطلاعیه فردایی ثبت نشده.")
+    if u.role == "ADMIN" and menu_text == "❓ مدیریت سؤالات":
+        rows = (await s.execute(select(Question, User).join(User, Question.student_user_id == User.id).order_by(Question.id.desc()).limit(50))).all()
+        return "❓ سؤالات موجود:\n" + ("\n\n".join(f"#{q.id} [{q.status}] | {usr.name}\n{q.text}\nپاسخ: {q.answer or '---'}" for q, usr in rows) or "سؤالی ثبت نشده.")
+    if u.role == "ADMIN" and menu_text == "👥 مدیریت کاربران":
+        rows = (await s.execute(select(User).order_by(User.id))).scalars().all()
+        return "👥 کاربران موجود:\n" + ("\n".join(f"#{x.id} | {x.name or 'بدون نام'} | {ROLE_NAMES.get(x.role,x.role)} | {'فعال' if x.active else 'غیرفعال'}" for x in rows) or "کاربری ثبت نشده.")
+    if u.role == "ADMIN" and menu_text == "🗂️ مدیریت فایل‌ها":
+        rows = (await s.execute(select(Note).order_by(Note.id.desc()).limit(100))).scalars().all()
+        return "🗂️ فایل‌های جزوات:\n" + ("\n".join(f"#{n.id} | {n.file_name or 'PDF'} | {n.title}" for n in rows) or "فایلی ثبت نشده.")
     return None
 
 async def show_assigner(update, context, u):
@@ -827,24 +860,52 @@ async def show_assigner(update, context, u):
 async def show_admin(update, context, u):
     t = update.message.text
     if t == "👨‍🎓 مدیریت دانش‌آموزان":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview:
+                await reply_long(update.message, preview)
         context.user_data["state"] = "admin_student"
         await reply_long(update.message, "👨‍🎓 مدیریت دانش‌آموزان\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "👤 مدیریت تعیین‌کنندگان":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview:
+                await reply_long(update.message, preview)
         context.user_data["state"] = "admin_assigner"
         await reply_long(update.message, "👤 مدیریت تعیین‌کنندگان\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "🏫 مدیریت کلاس‌ها":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview:
+                await reply_long(update.message, preview)
         context.user_data["state"] = "admin_class"
         await reply_long(update.message, "🏫 مدیریت کلاس‌ها\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس اطلاعات لازم را جداگانه ارسال می‌کنم.")
     elif t == "📚 مدیریت درس‌ها":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview:
+                await reply_long(update.message, preview)
         context.user_data["state"] = "admin_subject"
         await reply_long(update.message, "📚 مدیریت درس‌ها\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "🔐 مدیریت دسترسی‌ها":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview:
+                await reply_long(update.message, preview)
         context.user_data["state"] = "admin_access"
         await reply_long(update.message, "🔐 مدیریت دسترسی‌ها\n\nابتدا «افزودن» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "📝 مدیریت تکالیف":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview:
+                await reply_long(update.message, preview)
         context.user_data["state"] = "admin_assignment"
         await reply_long(update.message, "📝 مدیریت تکالیف\n\nابتدا عملیات را بفرستید؛ سپس عنوان، متن، درس و زمان هرکدام در پیام جداگانه دریافت می‌شود.")
     elif t == "📝 مدیریت امتحانات":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview:
+                await reply_long(update.message, preview)
         context.user_data["state"] = "admin_exam"
         await reply_long(update.message, "📝 مدیریت امتحانات\n\nابتدا عملیات را بفرستید؛ سپس هر فیلد را در پیام جداگانه دریافت می‌کنم.")
     elif t == "📖 مدیریت جزوات":
@@ -861,18 +922,34 @@ async def show_admin(update, context, u):
         context.user_data["state"] = "admin_note_title"
         await reply_long(update.message, "حالا «افزودن» یا «حذف» را ارسال کنید. برای افزودن، درس از فهرست موجود انتخاب می‌شود و عنوان را جداگانه می‌گیرم.")
     elif t == "📅 مدیریت برنامه هفتگی":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview:
+                await reply_long(update.message, preview)
         context.user_data["state"] = "admin_schedule"
         await reply_long(update.message, "📅 مدیریت برنامه هفتگی\n\nابتدا عملیات را بفرستید؛ سپس کلاس، درس، روز و زنگ را جداگانه دریافت می‌کنم. افزودن، رکوردهای قبلی را حذف نمی‌کند.")
     elif t in ("📢 مدیریت اطلاعیه‌ها", "📨 ارسال پیام همگانی"):
         context.user_data["state"] = "admin_announcement"
         await reply_long(update.message, "📢 مدیریت اطلاعیه‌ها\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و کلاس را جداگانه ارسال کنید. برای همه کلاس‌ها «همه» بنویسید.")
     elif t == "🔔 اطلاعیه فردا":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview:
+                await reply_long(update.message, preview)
         context.user_data["state"] = "admin_tomorrow"
         await reply_long(update.message, "🔔 اطلاعیه فردا\\n\\nابتدا «افزودن» را ارسال کنید؛ سپس عنوان، متن، زمان و کلاس را جداگانه می‌گیرم.")
     elif t == "❓ مدیریت سؤالات":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview:
+                await reply_long(update.message, preview)
         context.user_data["state"] = "admin_questions"
         await reply_long(update.message, "❓ مدیریت سؤالات\n\n«نمایش»، «پاسخ» یا «حذف» را ارسال کنید؛ سپس اطلاعات لازم را جداگانه می‌گیرم.")
     elif t == "👥 مدیریت کاربران":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview:
+                await reply_long(update.message, preview)
         context.user_data["state"] = "admin_users"
         await reply_long(update.message, "👥 مدیریت کاربران\n\n«نمایش»، «فعال»، «غیرفعال» یا «تغییر نقش» را ارسال کنید؛ سپس اطلاعات لازم را جداگانه وارد می‌کنید.")
     elif t in ("📊 گزارش‌ها", "📋 گزارش فعالیت‌ها", "🕐 تاریخچه تغییرات"):
@@ -881,6 +958,10 @@ async def show_admin(update, context, u):
             logs = (await s.execute(select(ActivityLog).order_by(ActivityLog.id.desc()).limit(30))).scalars().all()
             await reply_long(update.message, f"📊 آخرین فعالیت‌ها:\n" + ("\n".join(f"{x.created_at.astimezone(TZ).strftime('%m/%d %H:%M')} | {x.action} | {x.details}" for x in logs) or "هنوز فعالیتی ثبت نشده."))
     elif t == "🗂️ مدیریت فایل‌ها":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview:
+                await reply_long(update.message, preview)
         context.user_data["state"] = "admin_files"
         await reply_long(update.message, "🗂️ مدیریت فایل‌ها\n\nبرای فهرست فایل‌ها «نمایش» و برای حذف یک فایل «حذف» را ارسال کنید؛ شناسه فایل را در پیام بعدی می‌گیرم.")
     elif t == "⚙️ تنظیمات بات":
@@ -893,8 +974,6 @@ async def show_admin(update, context, u):
     elif t == "🔔 ارسال اعلان":
         context.user_data["state"] = "admin_announcement"
         await reply_long(update.message, "📨 ارسال اعلان\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و کلاس را جداگانه ارسال کنید.")
-    elif t == "👨‍🎓 مدیریت تعیین‌کنندگان":
-        pass
     else:
         await reply_long(update.message, "پنل مدیریت آماده است.", reply_markup=keyboard(ADMIN_MENU))
 
