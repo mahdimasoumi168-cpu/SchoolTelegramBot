@@ -302,6 +302,18 @@ def keyboard(rows):
     )
 
 
+def back_to_panel_markup(role):
+    if role == "ADMIN":
+        label = "⚙️ بازگشت به پنل مدیریت"
+    elif role == "ASSIGNER":
+        label = "👤 بازگشت به پنل تعیین‌کننده"
+    else:
+        label = "👨‍🎓 بازگشت به پنل دانش‌آموز"
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data="menu:__BACK_PANEL__")]])
+
+async def reply_panel_text(message, text: str, user):
+    await reply_long(message, text, reply_markup=back_to_panel_markup(user.role))
+
 async def reply_long(message, text: str, **kwargs):
     """Send text safely within Telegram's 4096-character message limit."""
     text = str(text or "")
@@ -481,6 +493,19 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
     if not data.startswith("menu:"):
         return
     text = data[5:]
+    if text == "__BACK_PANEL__":
+        context.user_data.clear()
+        u = await db_user(query.from_user.id)
+        if not u or not u.active:
+            await reply_long(query.message, "حساب شما فعال نیست.")
+            return
+        if u.role == "ADMIN":
+            await reply_long(query.message, "⚙️ پنل مدیریت", reply_markup=keyboard(ADMIN_MENU))
+        elif u.role == "ASSIGNER":
+            await reply_long(query.message, "👤 پنل تعیین‌کننده", reply_markup=keyboard(ASSIGNER_MENU))
+        elif u.role == "STUDENT":
+            await reply_long(query.message, "👨‍🎓 پنل دانش‌آموز", reply_markup=keyboard(STUDENT_MENU))
+        return
     u = await db_user(query.from_user.id)
     if not u or not u.active or u.role == "PENDING":
         await reply_long(query.message, "حساب شما فعال نیست. ابتدا /start را بزنید و با اطلاعاتی که مدیریت ثبت کرده وارد شوید.")
@@ -824,25 +849,25 @@ async def show_assigner(update, context, u):
     elif t == "📝 تکالیف":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
-            if preview: await reply_long(update.message, preview)
+            if preview: await reply_panel_text(update.message, preview, u)
         context.user_data["state"] = "assigner_assignment"
         await reply_long(update.message, "📝 مدیریت تکالیف\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید. بعد از آن هر فیلد را جداگانه از شما می‌گیرم.")
     elif t == "📢 ارسال اطلاعیه":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
-            if preview: await reply_long(update.message, preview)
+            if preview: await reply_panel_text(update.message, preview, u)
         context.user_data["state"] = "assigner_announcement"
         await reply_long(update.message, "📢 ارسال اطلاعیه\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان و متن اطلاعیه را جداگانه ارسال کنید. اطلاعیه برای کلاس‌های مجاز شما ارسال می‌شود.")
     elif t == "📅 برنامه هفتگی":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
-            if preview: await reply_long(update.message, preview)
+            if preview: await reply_panel_text(update.message, preview, u)
         context.user_data["state"] = "assigner_schedule"
         await reply_long(update.message, "📅 مدیریت برنامه هفتگی\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید. افزودن، برنامه‌های قبلی را حذف نمی‌کند.")
     elif t == "📝 امتحانات":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
-            if preview: await reply_long(update.message, preview)
+            if preview: await reply_panel_text(update.message, preview, u)
         context.user_data["state"] = "assigner_exam"
         await reply_long(update.message, "📝 مدیریت امتحانات\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید.")
     elif t == "📖 جزوات":
@@ -883,7 +908,7 @@ async def show_assigner(update, context, u):
     elif t == "🔔 اطلاعیه فردا":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
-            if preview: await reply_long(update.message, preview)
+            if preview: await reply_panel_text(update.message, preview, u)
         context.user_data["state"] = "assigner_tomorrow"
         await reply_long(update.message, "🔔 اطلاعیه فردا\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و زمان را جداگانه ارسال کنید.")
     else:
@@ -964,7 +989,7 @@ async def show_admin(update, context, u):
     elif t in ("📢 مدیریت اطلاعیه‌ها", "📨 ارسال پیام همگانی"):
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
-            if preview: await reply_long(update.message, preview)
+            if preview: await reply_panel_text(update.message, preview, u)
         context.user_data["state"] = "admin_announcement"
         await reply_long(update.message, "📢 مدیریت اطلاعیه‌ها\n\nابتدا «افزودن» را بفرستید؛ عنوان و متن را جداگانه دریافت می‌کنم و مقصد از اطلاعات ثبت‌شده تعیین می‌شود.")
     elif t == "🔔 اطلاعیه فردا":
