@@ -597,7 +597,7 @@ async def show_student(update, u):
                 await reply_long(update.message, "\n".join(lines))
                 for n, sub in data:
                     try:
-                        await update.message.reply_document(n.file_id, caption=f"📖 {n.title}\n📚 {sub.name}")
+                        await update.message.reply_document(n.file_id, caption=f"📖 جزوه #{n.id}\n📌 عنوان: {n.title}\n📚 درس: {sub.name}\n📎 فایل: {n.file_name or 'PDF'}")
                     except Exception:
                         log.exception("student note delivery failed for note %s", n.id)
                         await reply_long(update.message, f"⚠️ فایل جزوه #{n.id} ثبت شده است اما ارسال فایل ناموفق بود.")
@@ -718,64 +718,91 @@ async def advance_wizard_field(update, context, u, flow_key):
 
 
 async def panel_inquiry_text(s, u, menu_text):
+    """DB-backed listing used by every management/inquiry panel."""
     if u.role == "ASSIGNER":
         accesses = (await s.execute(select(Access).where(Access.assigner_user_id == u.id))).scalars().all()
         subject_ids = {a.subject_id for a in accesses if a.subject_id is not None}
         class_ids = {a.class_id for a in accesses}
+        if menu_text == "👨‍🎓 دانش‌آموزان":
+            rows=(await s.execute(select(Student,User,ClassRoom).join(User,Student.user_id==User.id).join(ClassRoom,Student.class_id==ClassRoom.id,isouter=True).where(Student.class_id.in_(class_ids) if class_ids else Student.id==-1).order_by(Student.id.desc()).limit(100))).all()
+            return "👨‍🎓 دانش‌آموزان موجود:\n"+("\n".join(f"#{st.id} | {usr.name} | کد مدرسه: {st.school_code} | کلاس: {cls.name if cls else 'ثبت نشده'}" for st,usr,cls in rows) or "دانش‌آموزی برای دسترسی شما پیدا نشد.")
+        if menu_text == "📚 درس‌ها":
+            rows=(await s.execute(select(Subject,ClassRoom).join(ClassRoom,Subject.class_id==ClassRoom.id).where(Subject.id.in_(subject_ids) if subject_ids else Subject.id==-1).order_by(Subject.name))).all()
+            return "📚 درس‌های موجود:\n"+("\n".join(f"#{sub.id} | {sub.name} | کلاس: {cls.name}" for sub,cls in rows) or "درسی برای دسترسی شما پیدا نشد.")
         if menu_text == "📝 تکالیف":
-            rows = (await s.execute(select(Assignment, Subject).join(Subject, Assignment.subject_id == Subject.id).where(Assignment.subject_id.in_(subject_ids) if subject_ids else Assignment.id == -1).order_by(Assignment.id.desc()).limit(30))).all()
-            return "📝 تکالیف موجود:\n" + ("\n\n".join(f"#{a.id} | 📚 {sub.name}\n• {a.title}\n{a.body}" for a, sub in rows) or "تکلیفی پیدا نشد.")
-        if menu_text == "📝 امتحانات":
-            rows = (await s.execute(select(Exam, Subject).join(Subject, Exam.subject_id == Subject.id).where(Exam.subject_id.in_(subject_ids) if subject_ids else Exam.id == -1).order_by(Exam.id.desc()).limit(30))).all()
-            return "📝 امتحانات موجود:\n" + ("\n\n".join(f"#{e.id} | 📚 {sub.name} | {e.title}\n📅 {e.exam_at.astimezone(TZ).strftime('%Y/%m/%d %H:%M') if e.exam_at else 'زمان نامشخص'}" for e, sub in rows) or "امتحانی پیدا نشد.")
+            rows=(await s.execute(select(Assignment,Subject).join(Subject,Assignment.subject_id==Subject.id).where(Assignment.subject_id.in_(subject_ids) if subject_ids else Assignment.id==-1).order_by(Assignment.id.desc()).limit(50))).all()
+            return "📝 تکالیف موجود:\n"+("\n\n".join(f"#{a.id} | 📚 {sub.name}\n• {a.title}\n{a.body}\n⏰ {a.due_at.astimezone(TZ).strftime('%Y/%m/%d %H:%M') if a.due_at else 'بدون مهلت'}" for a,sub in rows) or "تکلیفی پیدا نشد.")
         if menu_text == "📅 برنامه هفتگی":
-            rows = (await s.execute(select(Schedule, Subject).join(Subject, Schedule.subject_id == Subject.id).where(Schedule.class_id.in_(class_ids) if class_ids else Schedule.id == -1).order_by(Schedule.id.desc()).limit(50))).all()
-            return "📅 برنامه‌های موجود:\n" + ("\n".join(f"#{sch.id} | {sch.weekday} | {sch.period} | 📚 {sub.name}" for sch, sub in rows) or "برنامه‌ای پیدا نشد.")
+            rows=(await s.execute(select(Schedule,Subject,ClassRoom).join(Subject,Schedule.subject_id==Subject.id).join(ClassRoom,Schedule.class_id==ClassRoom.id).where(Schedule.class_id.in_(class_ids) if class_ids else Schedule.id==-1).order_by(Schedule.id.desc()).limit(100))).all()
+            return "📅 برنامه‌های موجود:\n"+("\n".join(f"#{sch.id} | کلاس: {cls.name} | {sch.weekday} | {sch.period} | 📚 {sub.name}" for sch,sub,cls in rows) or "برنامه‌ای پیدا نشد.")
+        if menu_text == "📝 امتحانات":
+            rows=(await s.execute(select(Exam,Subject).join(Subject,Exam.subject_id==Subject.id).where(Exam.subject_id.in_(subject_ids) if subject_ids else Exam.id==-1).order_by(Exam.id.desc()).limit(50))).all()
+            return "📝 امتحانات موجود:\n"+("\n\n".join(f"#{e.id} | 📚 {sub.name} | {e.title}\n📅 {e.exam_at.astimezone(TZ).strftime('%Y/%m/%d %H:%M') if e.exam_at else 'زمان نامشخص'}\n{e.details}" for e,sub in rows) or "امتحانی پیدا نشد.")
+        if menu_text == "📖 جزوات":
+            rows=(await s.execute(select(Note,Subject).join(Subject,Note.subject_id==Subject.id).where(Note.subject_id.in_(subject_ids) if subject_ids else Note.id==-1).order_by(Note.id.desc()).limit(50))).all()
+            return "📖 جزوات موجود:\n"+("\n\n".join(f"#{n.id} | 📚 {sub.name}\n📌 عنوان: {n.title}\n📎 فایل: {n.file_name or 'PDF'}\n🆔 File ID: {n.file_id}" for n,sub in rows) or "جزوه‌ای برای دسترسی شما پیدا نشد.")
+        if menu_text == "❓ سؤالات":
+            stmt=select(Question,User).join(User,Question.student_user_id==User.id).where(Question.status=="OPEN")
+            if subject_ids: stmt=stmt.where(or_(Question.subject_id.is_(None),Question.subject_id.in_(subject_ids)))
+            else: stmt=stmt.where(Question.id==-1)
+            rows=(await s.execute(stmt.order_by(Question.id.desc()).limit(50))).all()
+            return "❓ سؤالات باز:\n"+("\n\n".join(f"#{q.id} | {usr.name}\n{q.text}" for q,usr in rows) or "سؤال بازی پیدا نشد.")
         if menu_text == "🔔 اطلاعیه فردا":
-            rows = (await s.execute(select(Announcement).where(Announcement.kind == "tomorrow", Announcement.class_id.in_(class_ids) if class_ids else Announcement.id == -1).order_by(Announcement.id.desc()).limit(30))).scalars().all()
-            return "🔔 اطلاعیه‌های فردا:\n" + ("\n\n".join(f"#{a.id} | {a.title}\n{a.body}" for a in rows) or "اطلاعیه فردایی پیدا نشد.")
-    if u.role == "ADMIN" and menu_text == "📝 مدیریت تکالیف":
-        rows = (await s.execute(select(Assignment, Subject).join(Subject, Assignment.subject_id == Subject.id).order_by(Assignment.id.desc()).limit(50))).all()
-        return "📝 تکالیف موجود:\n" + ("\n\n".join(f"#{a.id} | 📚 {sub.name}\n• {a.title}\n{a.body}" for a, sub in rows) or "تکلیفی پیدا نشد.")
-    if u.role == "ADMIN" and menu_text == "📝 مدیریت امتحانات":
-        rows = (await s.execute(select(Exam, Subject).join(Subject, Exam.subject_id == Subject.id).order_by(Exam.id.desc()).limit(50))).all()
-        return "📝 امتحانات موجود:\n" + ("\n\n".join(f"#{e.id} | 📚 {sub.name} | {e.title}" for e, sub in rows) or "امتحانی پیدا نشد.")
-    if u.role == "ADMIN" and menu_text == "📅 مدیریت برنامه هفتگی":
-        rows = (await s.execute(select(Schedule, Subject, ClassRoom).join(Subject, Schedule.subject_id == Subject.id).join(ClassRoom, Schedule.class_id == ClassRoom.id).order_by(Schedule.id.desc()).limit(100))).all()
-        return "📅 برنامه‌های موجود:\n" + ("\n".join(f"#{sch.id} | {cls.name} | {sch.weekday} | {sch.period} | 📚 {sub.name}" for sch, sub, cls in rows) or "برنامه‌ای پیدا نشد.")
-    if u.role == "ADMIN" and menu_text == "👨‍🎓 مدیریت دانش‌آموزان":
-        rows = (await s.execute(select(Student, User, ClassRoom).join(User, Student.user_id == User.id).join(ClassRoom, Student.class_id == ClassRoom.id, isouter=True).order_by(Student.id.desc()).limit(100))).all()
-        return "👨‍🎓 دانش‌آموزان موجود:\n" + ("\n".join(f"#{st.id} | {usr.name} | کد: {st.school_code} | کلاس: {cls.name if cls else 'ثبت نشده'}" for st, usr, cls in rows) or "دانش‌آموزی پیدا نشد.")
-    if u.role == "ADMIN" and menu_text == "👤 مدیریت تعیین‌کنندگان":
-        rows = (await s.execute(select(User).where(User.role == "ASSIGNER").order_by(User.id.desc()).limit(100))).scalars().all()
-        return "👤 تعیین‌کنندگان موجود:\n" + ("\n".join(f"#{x.id} | {x.name} | {x.login_username or 'بدون نام کاربری'} | {'فعال' if x.active else 'غیرفعال'}" for x in rows) or "تعیین‌کننده‌ای پیدا نشد.")
-    if u.role == "ADMIN" and menu_text == "🏫 مدیریت کلاس‌ها":
-        rows = (await s.execute(select(ClassRoom).order_by(ClassRoom.id))).scalars().all()
-        return "🏫 کلاس‌های موجود:\n" + ("\n".join(f"#{x.id} | {x.name}" for x in rows) or "کلاسی پیدا نشد.")
-    if u.role == "ADMIN" and menu_text == "📚 مدیریت درس‌ها":
-        rows = (await s.execute(select(Subject, ClassRoom).join(ClassRoom, Subject.class_id == ClassRoom.id).order_by(Subject.id.desc()).limit(100))).all()
-        return "📚 درس‌های موجود:\n" + ("\n".join(f"#{sub.id} | {sub.name} | کلاس: {cls.name}" for sub, cls in rows) or "درسی پیدا نشد.")
-    if u.role == "ADMIN" and menu_text == "🔐 مدیریت دسترسی‌ها":
-        rows = (await s.execute(select(Access, User, ClassRoom, Subject).join(User, Access.assigner_user_id == User.id).join(ClassRoom, Access.class_id == ClassRoom.id).join(Subject, Access.subject_id == Subject.id, isouter=True).order_by(Access.id.desc()).limit(100))).all()
-        return "🔐 دسترسی‌های موجود:\n" + ("\n".join(f"#{a.id} | {usr.name} | کلاس: {cls.name} | درس: {sub.name if sub else 'همه'}" for a, usr, cls, sub in rows) or "دسترسی‌ای پیدا نشد.")
-    if u.role == "ADMIN" and menu_text == "📖 مدیریت جزوات":
-        rows = (await s.execute(select(Note, Subject).join(Subject, Note.subject_id == Subject.id).order_by(Note.id.desc()).limit(100))).all()
-        return "📖 جزوات موجود:\n" + ("\n".join(f"#{n.id} | {n.title} | {sub.name} | {n.file_name or 'PDF'}" for n, sub in rows) or "جزوه‌ای ثبت نشده.")
-    if u.role == "ADMIN" and menu_text in ("📢 مدیریت اطلاعیه‌ها", "📨 ارسال پیام همگانی", "🔔 ارسال اعلان"):
-        rows = (await s.execute(select(Announcement).where(Announcement.kind == "announcement").order_by(Announcement.id.desc()).limit(50))).scalars().all()
-        return "📢 اطلاعیه‌های موجود:\n" + ("\n\n".join(f"#{a.id} | {a.title}\n{a.body}" for a in rows) or "اطلاعیه‌ای ثبت نشده.")
-    if u.role == "ADMIN" and menu_text == "🔔 اطلاعیه فردا":
-        rows = (await s.execute(select(Announcement).where(Announcement.kind == "tomorrow").order_by(Announcement.id.desc()).limit(50))).scalars().all()
-        return "🔔 اطلاعیه‌های فردا:\n" + ("\n\n".join(f"#{a.id} | {a.title}\n{a.body}" for a in rows) or "اطلاعیه فردایی ثبت نشده.")
-    if u.role == "ADMIN" and menu_text == "❓ مدیریت سؤالات":
-        rows = (await s.execute(select(Question, User).join(User, Question.student_user_id == User.id).order_by(Question.id.desc()).limit(50))).all()
-        return "❓ سؤالات موجود:\n" + ("\n\n".join(f"#{q.id} [{q.status}] | {usr.name}\n{q.text}\nپاسخ: {q.answer or '---'}" for q, usr in rows) or "سؤالی ثبت نشده.")
-    if u.role == "ADMIN" and menu_text == "👥 مدیریت کاربران":
-        rows = (await s.execute(select(User).order_by(User.id))).scalars().all()
-        return "👥 کاربران موجود:\n" + ("\n".join(f"#{x.id} | {x.name or 'بدون نام'} | {ROLE_NAMES.get(x.role,x.role)} | {'فعال' if x.active else 'غیرفعال'}" for x in rows) or "کاربری ثبت نشده.")
-    if u.role == "ADMIN" and menu_text == "🗂️ مدیریت فایل‌ها":
-        rows = (await s.execute(select(Note).order_by(Note.id.desc()).limit(100))).scalars().all()
-        return "🗂️ فایل‌های جزوات:\n" + ("\n".join(f"#{n.id} | {n.file_name or 'PDF'} | {n.title}" for n in rows) or "فایلی ثبت نشده.")
+            rows=(await s.execute(select(Announcement).where(Announcement.kind=="tomorrow").order_by(Announcement.id.desc()).limit(50))).scalars().all()
+            return "🔔 اطلاعیه‌های فردا:\n"+("\n\n".join(f"#{a.id} | {a.title}\n{a.body}" for a in rows) or "اطلاعیه فردایی ثبت نشده.")
+        if menu_text == "📢 ارسال اطلاعیه":
+            rows=(await s.execute(select(Announcement).where(Announcement.kind=="announcement").order_by(Announcement.id.desc()).limit(50))).scalars().all()
+            return "📢 اطلاعیه‌های موجود:\n"+("\n\n".join(f"#{a.id} | {a.title}\n{a.body}" for a in rows) or "اطلاعیه‌ای ثبت نشده.")
+    if u.role == "ADMIN":
+        if menu_text == "👨‍🎓 مدیریت دانش‌آموزان":
+            rows=(await s.execute(select(Student,User,ClassRoom).join(User,Student.user_id==User.id).join(ClassRoom,Student.class_id==ClassRoom.id,isouter=True).order_by(Student.id.desc()).limit(100))).all()
+            return "👨‍🎓 دانش‌آموزان موجود:\n"+("\n".join(f"#{st.id} | {usr.name} | کد مدرسه: {st.school_code} | کلاس: {cls.name if cls else 'ثبت نشده'}" for st,usr,cls in rows) or "دانش‌آموزی ثبت نشده.")
+        if menu_text == "👤 مدیریت تعیین‌کنندگان":
+            rows=(await s.execute(select(User).where(User.role=="ASSIGNER").order_by(User.id.desc()).limit(100))).scalars().all()
+            return "👤 تعیین‌کنندگان موجود:\n"+("\n".join(f"#{x.id} | {x.name} | نام کاربری: {x.login_username or '---'} | {'فعال' if x.active else 'غیرفعال'}" for x in rows) or "تعیین‌کننده‌ای ثبت نشده.")
+        if menu_text == "🏫 مدیریت کلاس‌ها":
+            rows=(await s.execute(select(ClassRoom).order_by(ClassRoom.name))).scalars().all()
+            return "🏫 کلاس‌های موجود:\n"+("\n".join(f"#{x.id} | {x.name}" for x in rows) or "کلاسی ثبت نشده.")
+        if menu_text == "📚 مدیریت درس‌ها":
+            rows=(await s.execute(select(Subject,ClassRoom).join(ClassRoom,Subject.class_id==ClassRoom.id).order_by(Subject.name).limit(200))).all()
+            return "📚 درس‌های موجود:\n"+("\n".join(f"#{sub.id} | {sub.name} | کلاس: {cls.name} | دبیر: {sub.teacher_name or '---'}" for sub,cls in rows) or "درسی ثبت نشده.")
+        if menu_text == "🔐 مدیریت دسترسی‌ها":
+            rows=(await s.execute(select(Access,User,ClassRoom,Subject).join(User,Access.assigner_user_id==User.id).join(ClassRoom,Access.class_id==ClassRoom.id).join(Subject,Access.subject_id==Subject.id,isouter=True).order_by(Access.id.desc()).limit(200))).all()
+            return "🔐 دسترسی‌های موجود:\n"+("\n".join(f"#{a.id} | {usr.name} | کاربری: {usr.login_username or '---'} | کلاس: {cls.name} | درس: {sub.name if sub else 'همه'}" for a,usr,cls,sub in rows) or "دسترسی‌ای ثبت نشده.")
+        if menu_text == "📝 مدیریت تکالیف":
+            rows=(await s.execute(select(Assignment,Subject).join(Subject,Assignment.subject_id==Subject.id).order_by(Assignment.id.desc()).limit(100))).all()
+            return "📝 تکالیف موجود:\n"+("\n\n".join(f"#{a.id} | 📚 {sub.name}\n• {a.title}\n{a.body}\n⏰ {a.due_at.astimezone(TZ).strftime('%Y/%m/%d %H:%M') if a.due_at else 'بدون مهلت'}" for a,sub in rows) or "تکلیفی ثبت نشده.")
+        if menu_text == "📝 مدیریت امتحانات":
+            rows=(await s.execute(select(Exam,Subject).join(Subject,Exam.subject_id==Subject.id).order_by(Exam.id.desc()).limit(100))).all()
+            return "📝 امتحانات موجود:\n"+("\n\n".join(f"#{e.id} | 📚 {sub.name} | {e.title}\n📅 {e.exam_at.astimezone(TZ).strftime('%Y/%m/%d %H:%M') if e.exam_at else 'زمان نامشخص'}\n{e.details}" for e,sub in rows) or "امتحانی ثبت نشده.")
+        if menu_text == "📅 مدیریت برنامه هفتگی":
+            rows=(await s.execute(select(Schedule,Subject,ClassRoom).join(Subject,Schedule.subject_id==Subject.id).join(ClassRoom,Schedule.class_id==ClassRoom.id).order_by(Schedule.id.desc()).limit(100))).all()
+            return "📅 برنامه‌های موجود:\n"+("\n".join(f"#{sch.id} | کلاس: {cls.name} | {sch.weekday} | {sch.period} | 📚 {sub.name}" for sch,sub,cls in rows) or "برنامه‌ای ثبت نشده.")
+        if menu_text == "📖 مدیریت جزوات":
+            rows=(await s.execute(select(Note,Subject).join(Subject,Note.subject_id==Subject.id).order_by(Note.id.desc()).limit(100))).all()
+            return "📖 جزوات موجود:\n"+("\n\n".join(f"#{n.id} | 📚 {sub.name}\n📌 عنوان: {n.title}\n📎 فایل: {n.file_name or 'PDF'}\n🆔 File ID: {n.file_id}" for n,sub in rows) or "جزوه‌ای ثبت نشده.")
+        if menu_text in ("📢 مدیریت اطلاعیه‌ها","📨 ارسال پیام همگانی","🔔 ارسال اعلان"):
+            rows=(await s.execute(select(Announcement).where(Announcement.kind=="announcement").order_by(Announcement.id.desc()).limit(100))).scalars().all()
+            return "📢 اطلاعیه‌های موجود:\n"+("\n\n".join(f"#{a.id} | {a.title}\n{a.body}" for a in rows) or "اطلاعیه‌ای ثبت نشده.")
+        if menu_text == "🔔 اطلاعیه فردا":
+            rows=(await s.execute(select(Announcement).where(Announcement.kind=="tomorrow").order_by(Announcement.id.desc()).limit(100))).scalars().all()
+            return "🔔 اطلاعیه‌های فردا:\n"+("\n\n".join(f"#{a.id} | {a.title}\n{a.body}" for a in rows) or "اطلاعیه فردایی ثبت نشده.")
+        if menu_text == "❓ مدیریت سؤالات":
+            rows=(await s.execute(select(Question,User).join(User,Question.student_user_id==User.id).order_by(Question.id.desc()).limit(100))).all()
+            return "❓ سؤالات موجود:\n"+("\n\n".join(f"#{q.id} [{q.status}] | {usr.name}\n{q.text}\nپاسخ: {q.answer or '---'}" for q,usr in rows) or "سؤالی ثبت نشده.")
+        if menu_text == "👥 مدیریت کاربران":
+            rows=(await s.execute(select(User).order_by(User.id).limit(200))).scalars().all()
+            return "👥 کاربران موجود:\n"+("\n".join(f"#{x.id} | {x.name or 'بدون نام'} | {ROLE_NAMES.get(x.role,x.role)} | {'فعال' if x.active else 'غیرفعال'}" for x in rows) or "کاربری ثبت نشده.")
+        if menu_text == "🗂️ مدیریت فایل‌ها":
+            rows=(await s.execute(select(Note).order_by(Note.id.desc()).limit(100))).scalars().all()
+            return "🗂️ فایل‌های جزوات:\n"+("\n".join(f"#{n.id} | {n.file_name or 'PDF'} | {n.title}" for n in rows) or "فایلی ثبت نشده.")
+        if menu_text in ("📊 گزارش‌ها","📋 گزارش فعالیت‌ها","🕐 تاریخچه تغییرات"):
+            rows=(await s.execute(select(ActivityLog).order_by(ActivityLog.id.desc()).limit(100))).scalars().all()
+            return "📊 آخرین فعالیت‌ها:\n"+("\n".join(f"#{x.id} | {x.created_at.astimezone(TZ).strftime('%Y/%m/%d %H:%M')} | {x.action} | {x.details}" for x in rows) or "فعالیتی ثبت نشده.")
+        if menu_text == "🗄️ مدیریت دیتابیس":
+            return "🗄️ وضعیت دیتابیس: متصل و سالم ✅" if await s.scalar(select(1)) == 1 else "❌ خطا در اتصال دیتابیس."
+        if menu_text == "🔒 تنظیمات امنیتی":
+            return "🔒 تنظیمات امنیتی فعال است. اطلاعات حساس از متغیرهای محیطی خوانده می‌شوند."
     return None
 
 async def show_assigner(update, context, u):
@@ -801,6 +828,9 @@ async def show_assigner(update, context, u):
         context.user_data["state"] = "assigner_assignment"
         await reply_long(update.message, "📝 مدیریت تکالیف\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید. بعد از آن هر فیلد را جداگانه از شما می‌گیرم.")
     elif t == "📢 ارسال اطلاعیه":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview: await reply_long(update.message, preview)
         context.user_data["state"] = "assigner_announcement"
         await reply_long(update.message, "📢 ارسال اطلاعیه\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان و متن اطلاعیه را جداگانه ارسال کنید. اطلاعیه برای کلاس‌های مجاز شما ارسال می‌شود.")
     elif t == "📅 برنامه هفتگی":
@@ -851,6 +881,9 @@ async def show_assigner(update, context, u):
             context.user_data["state"] = "assigner_answer"
             await reply_long(update.message, "برای پاسخ، ابتدا شماره سؤال را در یک پیام و سپس متن پاسخ را در پیام بعدی ارسال کنید.")
     elif t == "🔔 اطلاعیه فردا":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview: await reply_long(update.message, preview)
         context.user_data["state"] = "assigner_tomorrow"
         await reply_long(update.message, "🔔 اطلاعیه فردا\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و زمان را جداگانه ارسال کنید.")
     else:
@@ -900,7 +933,7 @@ async def show_admin(update, context, u):
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_assignment"
-        await reply_long(update.message, "📝 مدیریت تکالیف\n\nابتدا عملیات را بفرستید؛ سپس عنوان، متن، درس و زمان هرکدام در پیام جداگانه دریافت می‌شود.")
+        await reply_long(update.message, "📝 مدیریت تکالیف\n\nابتدا عملیات را بفرستید؛ فقط اطلاعات لازم را جداگانه دریافت می‌کنم و درس از اطلاعات ثبت‌شده تعیین می‌شود.")
     elif t == "📝 مدیریت امتحانات":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
@@ -927,17 +960,20 @@ async def show_admin(update, context, u):
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_schedule"
-        await reply_long(update.message, "📅 مدیریت برنامه هفتگی\n\nابتدا عملیات را بفرستید؛ سپس کلاس، درس، روز و زنگ را جداگانه دریافت می‌کنم. افزودن، رکوردهای قبلی را حذف نمی‌کند.")
+        await reply_long(update.message, "📅 مدیریت برنامه هفتگی\n\nابتدا عملیات را بفرستید؛ کلاس و درس از اطلاعات ثبت‌شده تعیین می‌شوند و فقط روز و زنگ لازم دریافت می‌شود. افزودن، رکوردهای قبلی را حذف نمی‌کند.")
     elif t in ("📢 مدیریت اطلاعیه‌ها", "📨 ارسال پیام همگانی"):
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview: await reply_long(update.message, preview)
         context.user_data["state"] = "admin_announcement"
-        await reply_long(update.message, "📢 مدیریت اطلاعیه‌ها\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و کلاس را جداگانه ارسال کنید. برای همه کلاس‌ها «همه» بنویسید.")
+        await reply_long(update.message, "📢 مدیریت اطلاعیه‌ها\n\nابتدا «افزودن» را بفرستید؛ عنوان و متن را جداگانه دریافت می‌کنم و مقصد از اطلاعات ثبت‌شده تعیین می‌شود.")
     elif t == "🔔 اطلاعیه فردا":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_tomorrow"
-        await reply_long(update.message, "🔔 اطلاعیه فردا\\n\\nابتدا «افزودن» را ارسال کنید؛ سپس عنوان، متن، زمان و کلاس را جداگانه می‌گیرم.")
+        await reply_long(update.message, "🔔 اطلاعیه فردا\\n\\nابتدا «افزودن» را ارسال کنید؛ عنوان، متن و زمان را جداگانه می‌گیرم و مقصد از اطلاعات ثبت‌شده تعیین می‌شود.")
     elif t == "❓ مدیریت سؤالات":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
@@ -2095,7 +2131,7 @@ async def _document_message_locked(update: Update, context: ContextTypes.DEFAULT
         s.add(Note(subject_id=sub.id, title=meta[1], file_id=doc.file_id, file_name=doc.file_name or "", created_by=u.id))
         await s.commit()
     context.user_data.clear()
-    await reply_long(update.message, "📖 جزوه ثبت شد.", reply_markup=keyboard(ASSIGNER_MENU if u.role=="ASSIGNER" else ADMIN_MENU))
+    await reply_long(update.message, f"📖 جزوه ثبت شد.\n📌 عنوان: {meta[1]}\n📚 درس: {sub.name}\n📎 فایل: {doc.file_name or 'PDF'}", reply_markup=keyboard(ASSIGNER_MENU if u.role=="ASSIGNER" else ADMIN_MENU))
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
