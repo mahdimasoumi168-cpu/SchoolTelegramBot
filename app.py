@@ -702,6 +702,34 @@ async def advance_wizard_field(update, context, u, flow_key):
     await process_state(update, context, u)
 
 
+async def panel_inquiry_text(s, u, menu_text):
+    if u.role == "ASSIGNER":
+        accesses = (await s.execute(select(Access).where(Access.assigner_user_id == u.id))).scalars().all()
+        subject_ids = {a.subject_id for a in accesses if a.subject_id is not None}
+        class_ids = {a.class_id for a in accesses}
+        if menu_text == "📝 تکالیف":
+            rows = (await s.execute(select(Assignment, Subject).join(Subject, Assignment.subject_id == Subject.id).where(Assignment.subject_id.in_(subject_ids) if subject_ids else Assignment.id == -1).order_by(Assignment.id.desc()).limit(30))).all()
+            return "📝 تکالیف موجود:\n" + ("\n\n".join(f"#{a.id} | 📚 {sub.name}\n• {a.title}\n{a.body}" for a, sub in rows) or "تکلیفی پیدا نشد.")
+        if menu_text == "📝 امتحانات":
+            rows = (await s.execute(select(Exam, Subject).join(Subject, Exam.subject_id == Subject.id).where(Exam.subject_id.in_(subject_ids) if subject_ids else Exam.id == -1).order_by(Exam.id.desc()).limit(30))).all()
+            return "📝 امتحانات موجود:\n" + ("\n\n".join(f"#{e.id} | 📚 {sub.name} | {e.title}\n📅 {e.exam_at.astimezone(TZ).strftime('%Y/%m/%d %H:%M') if e.exam_at else 'زمان نامشخص'}" for e, sub in rows) or "امتحانی پیدا نشد.")
+        if menu_text == "📅 برنامه هفتگی":
+            rows = (await s.execute(select(Schedule, Subject).join(Subject, Schedule.subject_id == Subject.id).where(Schedule.class_id.in_(class_ids) if class_ids else Schedule.id == -1).order_by(Schedule.id.desc()).limit(50))).all()
+            return "📅 برنامه‌های موجود:\n" + ("\n".join(f"#{sch.id} | {sch.weekday} | {sch.period} | 📚 {sub.name}" for sch, sub in rows) or "برنامه‌ای پیدا نشد.")
+        if menu_text == "🔔 اطلاعیه فردا":
+            rows = (await s.execute(select(Announcement).where(Announcement.kind == "tomorrow", Announcement.class_id.in_(class_ids) if class_ids else Announcement.id == -1).order_by(Announcement.id.desc()).limit(30))).scalars().all()
+            return "🔔 اطلاعیه‌های فردا:\n" + ("\n\n".join(f"#{a.id} | {a.title}\n{a.body}" for a in rows) or "اطلاعیه فردایی پیدا نشد.")
+    if u.role == "ADMIN" and menu_text == "📝 مدیریت تکالیف":
+        rows = (await s.execute(select(Assignment, Subject).join(Subject, Assignment.subject_id == Subject.id).order_by(Assignment.id.desc()).limit(50))).all()
+        return "📝 تکالیف موجود:\n" + ("\n\n".join(f"#{a.id} | 📚 {sub.name}\n• {a.title}\n{a.body}" for a, sub in rows) or "تکلیفی پیدا نشد.")
+    if u.role == "ADMIN" and menu_text == "📝 مدیریت امتحانات":
+        rows = (await s.execute(select(Exam, Subject).join(Subject, Exam.subject_id == Subject.id).order_by(Exam.id.desc()).limit(50))).all()
+        return "📝 امتحانات موجود:\n" + ("\n\n".join(f"#{e.id} | 📚 {sub.name} | {e.title}" for e, sub in rows) or "امتحانی پیدا نشد.")
+    if u.role == "ADMIN" and menu_text == "📅 مدیریت برنامه هفتگی":
+        rows = (await s.execute(select(Schedule, Subject, ClassRoom).join(Subject, Schedule.subject_id == Subject.id).join(ClassRoom, Schedule.class_id == ClassRoom.id).order_by(Schedule.id.desc()).limit(100))).all()
+        return "📅 برنامه‌های موجود:\n" + ("\n".join(f"#{sch.id} | {cls.name} | {sch.weekday} | {sch.period} | 📚 {sub.name}" for sch, sub, cls in rows) or "برنامه‌ای پیدا نشد.")
+    return None
+
 async def show_assigner(update, context, u):
     t = update.message.text
     if t == "👨‍🎓 دانش‌آموزان":
@@ -719,15 +747,24 @@ async def show_assigner(update, context, u):
             subs = await allowed_subjects(s, u)
             await reply_long(update.message, "📚 درس‌های در دسترس:\n" + ("\n".join(f"• {x.id}: {x.name}" for x in subs) or "درسی در دسترس نیست."))
     elif t == "📝 تکالیف":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview: await reply_long(update.message, preview)
         context.user_data["state"] = "assigner_assignment"
         await reply_long(update.message, "📝 مدیریت تکالیف\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید. بعد از آن هر فیلد را جداگانه از شما می‌گیرم.")
     elif t == "📢 ارسال اطلاعیه":
         context.user_data["state"] = "assigner_announcement"
         await reply_long(update.message, "📢 ارسال اطلاعیه\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان و متن اطلاعیه را جداگانه ارسال کنید. اطلاعیه برای کلاس‌های مجاز شما ارسال می‌شود.")
     elif t == "📅 برنامه هفتگی":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview: await reply_long(update.message, preview)
         context.user_data["state"] = "assigner_schedule"
         await reply_long(update.message, "📅 مدیریت برنامه هفتگی\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید. افزودن، برنامه‌های قبلی را حذف نمی‌کند.")
     elif t == "📝 امتحانات":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, t)
+            if preview: await reply_long(update.message, preview)
         context.user_data["state"] = "assigner_exam"
         await reply_long(update.message, "📝 مدیریت امتحانات\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید.")
     elif t == "📖 جزوات":
