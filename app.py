@@ -57,6 +57,15 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSe
 POLL_LOCK_CONN = None
 POLL_LOCK_ID = 7165912028
 
+USER_LOCKS = {}
+
+def get_user_lock(telegram_id: int):
+    lock = USER_LOCKS.get(telegram_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        USER_LOCKS[telegram_id] = lock
+    return lock
+
 async def acquire_poll_lock():
     global POLL_LOCK_CONN
     if engine.dialect.name != "postgresql":
@@ -418,6 +427,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    async with get_user_lock(query.from_user.id):
+        return await _menu_callback_locked(update, context)
+
+
+async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data or ""
@@ -1932,6 +1947,13 @@ async def process_state(update, context, u):
 
 
 async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user:
+        async with get_user_lock(update.effective_user.id):
+            return await _message_locked(update, context)
+    return
+
+
+async def _message_locked(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
     u = await ensure_user(update.effective_user.id, update.effective_user.full_name or "")
@@ -1960,6 +1982,13 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user:
+        async with get_user_lock(update.effective_user.id):
+            return await _document_message_locked(update, context)
+    return
+
+
+async def _document_message_locked(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = await db_user(update.effective_user.id)
     if not u or u.role not in ("ASSIGNER", "ADMIN"):
         return
@@ -2051,7 +2080,7 @@ def main():
         .build()
     )
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:)"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:)"))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
     app.add_error_handler(error_handler)
