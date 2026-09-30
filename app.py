@@ -244,7 +244,10 @@ ROLE_NAMES = {"STUDENT": "دانش‌آموز", "ASSIGNER": "تعیین‌کنن
 
 
 def norm_name(value: str) -> str:
-    return " ".join((value or "").strip().casefold().split())
+    # Normalize common Persian/Arabic variants so login/search works regardless
+    # of keyboard layout (ي/ی, ك/ک, ZWNJ and repeated whitespace).
+    value = (value or "").replace("ي", "ی").replace("ى", "ی").replace("ك", "ک").replace("\u200c", " ")
+    return " ".join(value.strip().casefold().split())
 
 
 def hash_password(password: str, salt: str | None = None) -> str:
@@ -278,6 +281,17 @@ async def reply_long(message, text: str, **kwargs):
         # chunk can create noisy duplicate keyboards.
         options = kwargs if i == len(chunks) - 1 else {k: v for k, v in kwargs.items() if k != "reply_markup"}
         await message.reply_text(chunk, **options)
+
+
+async def send_long(bot, chat_id: int, text: str, **kwargs):
+    """Send bot-initiated text safely within Telegram's 4096-character limit."""
+    text = str(text or "")
+    if not text:
+        return await send_long(bot, chat_id, "", **kwargs)
+    chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)]
+    for i, chunk in enumerate(chunks):
+        options = kwargs if i == len(chunks) - 1 else {k: v for k, v in kwargs.items() if k != "reply_markup"}
+        await send_long(bot, chat_id, chunk, **options)
 
 
 class _CallbackMessage:
@@ -318,16 +332,16 @@ async def log_action(user_id: int | None, action: str, details: str = ""):
 async def panel(update: Update, text: str = "منوی پنل:"):
     u = await db_user(update.effective_user.id)
     if not u:
-        await update.message.reply_text("کاربر پیدا نشد. /start را بزنید.")
+        await reply_long(update.message, "کاربر پیدا نشد. /start را بزنید.")
         return
     if u.role == "ADMIN":
-        await update.message.reply_text(text, reply_markup=keyboard(ADMIN_MENU))
+        await reply_long(update.message, text, reply_markup=keyboard(ADMIN_MENU))
     elif u.role == "ASSIGNER":
-        await update.message.reply_text(text, reply_markup=keyboard(ASSIGNER_MENU))
+        await reply_long(update.message, text, reply_markup=keyboard(ASSIGNER_MENU))
     elif u.role == "STUDENT":
-        await update.message.reply_text(text, reply_markup=keyboard(STUDENT_MENU))
+        await reply_long(update.message, text, reply_markup=keyboard(STUDENT_MENU))
     else:
-        await update.message.reply_text("حساب شما هنوز توسط مدیریت تأیید نشده است.", reply_markup=ReplyKeyboardRemove())
+        await reply_long(update.message, "حساب شما هنوز توسط مدیریت تأیید نشده است.", reply_markup=ReplyKeyboardRemove())
 
 
 async def notify_pending_admin(context: ContextTypes.DEFAULT_TYPE, u: User):
@@ -345,7 +359,7 @@ async def notify_pending_admin(context: ContextTypes.DEFAULT_TYPE, u: User):
                 return
             s.add(ActivityLog(user_id=u.id, action="pending_user_notice", details=str(u.telegram_id)))
             await s.commit()
-        await context.bot.send_message(
+        await send_long(context.bot, 
             int(ADMIN_TELEGRAM_ID),
             f"👤 کاربر جدید در انتظار نقش است.\\nنام: {u.name}\\nTelegram ID: {u.telegram_id}\\n\\nاز «👥 مدیریت کاربران» نقش STUDENT یا ASSIGNER را تعیین کنید."
         )
@@ -371,7 +385,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await panel(update, f"سلام {u.name} 👋\nنقش شما: {ROLE_NAMES[u.role]}")
         return
     context.user_data["state"] = "auth_choice"
-    await update.message.reply_text(
+    await reply_long(update.message, 
         "🔐 ورود به سامانه مدرسه\n\nلطفاً نوع حساب خود را انتخاب کنید:",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("👨‍🎓 ورود دانش‌آموز", callback_data="auth:student")],
@@ -387,26 +401,26 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "auth:student":
         context.user_data.clear()
         context.user_data["state"] = "auth_student_school_code"
-        await query.message.reply_text("👨‍🎓 ورود دانش‌آموز\n\nابتدا کد مدرسه را ارسال کنید:")
+        await reply_long(query.message, "👨‍🎓 ورود دانش‌آموز\n\nابتدا کد مدرسه را ارسال کنید:")
         return
     if data == "auth:assigner":
         context.user_data.clear()
         context.user_data["state"] = "auth_assigner_username"
-        await query.message.reply_text("👤 ورود تعیین‌کننده\n\nابتدا نام کاربری را ارسال کنید:")
+        await reply_long(query.message, "👤 ورود تعیین‌کننده\n\nابتدا نام کاربری را ارسال کنید:")
         return
     if not data.startswith("menu:"):
         return
     text = data[5:]
     u = await db_user(query.from_user.id)
     if not u or not u.active or u.role == "PENDING":
-        await query.message.reply_text("حساب شما فعال نیست. ابتدا /start را بزنید و با اطلاعاتی که مدیریت ثبت کرده وارد شوید.")
+        await reply_long(query.message, "حساب شما فعال نیست. ابتدا /start را بزنید و با اطلاعاتی که مدیریت ثبت کرده وارد شوید.")
         return
     if text == "🚪 خروج":
         await logout(callback_update(query, text), context)
         return
     if u.role == "STUDENT" and text == "❓ سؤال":
         context.user_data["state"] = "student_question_subject"
-        await query.message.reply_text("❓ سؤال\n\nنام درس را ارسال کنید؛ اگر سؤال عمومی است «عمومی» بنویسید. سپس متن سؤال را در پیام بعدی ارسال کنید. برای لغو «انصراف».")
+        await reply_long(query.message, "❓ سؤال\n\nنام درس را ارسال کنید؛ اگر سؤال عمومی است «عمومی» بنویسید. سپس متن سؤال را در پیام بعدی ارسال کنید. برای لغو «انصراف».")
         return
     proxy = callback_update(query, text)
     if u.role == "STUDENT":
@@ -424,7 +438,7 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
             u.active = False
             await s.commit()
     context.user_data.clear()
-    await update.message.reply_text("با موفقیت خارج شدید. برای ورود دوباره /start را بزنید.", reply_markup=ReplyKeyboardRemove())
+    await reply_long(update.message, "با موفقیت خارج شدید. برای ورود دوباره /start را بزنید.", reply_markup=ReplyKeyboardRemove())
 
 
 async def show_student(update, u):
@@ -432,15 +446,15 @@ async def show_student(update, u):
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
             if not st or not st.class_id:
-                await update.message.reply_text("هنوز کلاسی برای شما ثبت نشده.")
+                await reply_long(update.message, "هنوز کلاسی برای شما ثبت نشده.")
             else:
                 rows = (await s.execute(select(Subject).where(Subject.class_id == st.class_id).order_by(Subject.name))).scalars().all()
-                await update.message.reply_text("📚 درس‌های شما:\n" + ("\n".join(f"• {x.name}" for x in rows) or "هنوز درسی ثبت نشده."))
+                await reply_long(update.message, "📚 درس‌های شما:\n" + ("\n".join(f"• {x.name}" for x in rows) or "هنوز درسی ثبت نشده."))
     elif update.message.text == "📝 تکالیف":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
             if not st or not st.class_id:
-                await update.message.reply_text("کلاس شما مشخص نیست.")
+                await reply_long(update.message, "کلاس شما مشخص نیست.")
                 return
             q = await s.execute(
                 select(Assignment, Subject).join(Subject, Assignment.subject_id == Subject.id)
@@ -448,7 +462,7 @@ async def show_student(update, u):
             )
             data = q.all()
             if not data:
-                await update.message.reply_text("تکلیفی ثبت نشده است.")
+                await reply_long(update.message, "تکلیفی ثبت نشده است.")
             else:
                 out = ["📝 تکالیف:"]
                 for a, sub in data:
@@ -459,19 +473,19 @@ async def show_student(update, u):
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
             if not st or not st.class_id:
-                await update.message.reply_text("کلاس شما مشخص نیست.")
+                await reply_long(update.message, "کلاس شما مشخص نیست.")
                 return
             q = await s.execute(select(Schedule, Subject).join(Subject, Schedule.subject_id == Subject.id).where(Schedule.class_id == st.class_id))
             data = q.all()
             out = ["📅 برنامه هفتگی:"]
             for sch, sub in data:
                 out.append(f"• {sch.weekday} | {sch.period} | {sub.name}")
-            await update.message.reply_text("\n".join(out) if len(out) > 1 else "برنامه‌ای ثبت نشده.")
+            await reply_long(update.message, "\n".join(out) if len(out) > 1 else "برنامه‌ای ثبت نشده.")
     elif update.message.text == "📝 امتحانات":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
             if not st or not st.class_id:
-                await update.message.reply_text("کلاس شما مشخص نیست.")
+                await reply_long(update.message, "کلاس شما مشخص نیست.")
                 return
             q = await s.execute(select(Exam, Subject).join(Subject, Exam.subject_id == Subject.id).where(Subject.class_id == st.class_id).order_by(Exam.exam_at))
             data = q.all()
@@ -479,7 +493,7 @@ async def show_student(update, u):
             for e, sub in data:
                 dt = e.exam_at.astimezone(TZ).strftime("%Y/%m/%d %H:%M") if e.exam_at else "زمان نامشخص"
                 out.append(f"\n📚 {sub.name}\n• {e.title}\n📅 {dt}\n{e.details}")
-            await update.message.reply_text("\n".join(out) if len(out) > 1 else "امتحانی ثبت نشده.")
+            await reply_long(update.message, "\n".join(out) if len(out) > 1 else "امتحانی ثبت نشده.")
     elif update.message.text in ("📢 اطلاعیه‌ها", "🔔 اطلاعیه فردا"):
         kind = "tomorrow" if update.message.text == "🔔 اطلاعیه فردا" else "announcement"
         async with SessionLocal() as s:
@@ -489,17 +503,17 @@ async def show_student(update, u):
             out = ["🔔 اطلاعیه‌ها:"]
             for a in data:
                 out.append(f"\n📌 {a.title}\n{a.body}")
-            await update.message.reply_text("\n".join(out) if len(out) > 1 else "اطلاعیه‌ای ثبت نشده.")
+            await reply_long(update.message, "\n".join(out) if len(out) > 1 else "اطلاعیه‌ای ثبت نشده.")
     elif update.message.text == "📖 جزوات":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
             if not st or not st.class_id:
-                await update.message.reply_text("کلاس شما مشخص نیست.")
+                await reply_long(update.message, "کلاس شما مشخص نیست.")
                 return
             q = await s.execute(select(Note, Subject).join(Subject, Note.subject_id == Subject.id).where(Subject.class_id == st.class_id).order_by(Note.id.desc()))
             data = q.all()
             if not data:
-                await update.message.reply_text("جزوه‌ای ثبت نشده.")
+                await reply_long(update.message, "جزوه‌ای ثبت نشده.")
             else:
                 for n, sub in data:
                     await update.message.reply_document(n.file_id, caption=f"📖 {n.title}\n📚 {sub.name}")
@@ -510,16 +524,16 @@ async def show_student(update, u):
             # Callback flow is handled in menu_callback before reaching here.
             return
         context.user_data["state"] = "student_question"
-        await update.message.reply_text("❓ سؤال\n\nنام درس یا «عمومی» را در یک پیام بفرستید؛ سپس متن سؤال را در پیام بعدی ارسال کنید. برای لغو «انصراف».")
+        await reply_long(update.message, "❓ سؤال\n\nنام درس یا «عمومی» را در یک پیام بفرستید؛ سپس متن سؤال را در پیام بعدی ارسال کنید. برای لغو «انصراف».")
     elif update.message.text == "👤 حساب کاربری":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
             cls = None
             if st and st.class_id:
                 cls = (await s.execute(select(ClassRoom).where(ClassRoom.id == st.class_id))).scalar_one_or_none()
-            await update.message.reply_text(f"👤 حساب کاربری\nنام: {u.name}\nنقش: {ROLE_NAMES[u.role]}\nکلاس: {cls.name if cls else 'ثبت نشده'}")
+            await reply_long(update.message, f"👤 حساب کاربری\nنام: {u.name}\nنقش: {ROLE_NAMES[u.role]}\nکلاس: {cls.name if cls else 'ثبت نشده'}")
     else:
-        await update.message.reply_text("برای انتخاب گزینه از دکمه‌های پنل استفاده کنید.", reply_markup=keyboard(STUDENT_MENU))
+        await reply_long(update.message, "برای انتخاب گزینه از دکمه‌های پنل استفاده کنید.", reply_markup=keyboard(STUDENT_MENU))
 
 
 async def allowed_subjects(s, u):
@@ -539,30 +553,30 @@ async def show_assigner(update, context, u):
             access = (await s.execute(select(Access).where(Access.assigner_user_id == u.id))).scalars().all()
             class_ids = {a.class_id for a in access}
             if not class_ids:
-                await update.message.reply_text("هنوز دسترسی کلاسی برای شما تعریف نشده.")
+                await reply_long(update.message, "هنوز دسترسی کلاسی برای شما تعریف نشده.")
                 return
             q = await s.execute(select(Student, User).join(User, Student.user_id == User.id).where(Student.class_id.in_(class_ids)))
             data = q.all()
-            await update.message.reply_text("👨‍🎓 دانش‌آموزان:\n" + ("\n".join(f"• {user.name} — {user.telegram_id}" for _, user in data) or "دانش‌آموزی نیست."))
+            await reply_long(update.message, "👨‍🎓 دانش‌آموزان:\n" + ("\n".join(f"• {user.name} — {user.telegram_id}" for _, user in data) or "دانش‌آموزی نیست."))
     elif t == "📚 درس‌ها":
         async with SessionLocal() as s:
             subs = await allowed_subjects(s, u)
-            await update.message.reply_text("📚 درس‌های در دسترس:\n" + ("\n".join(f"• {x.id}: {x.name}" for x in subs) or "درسی در دسترس نیست."))
+            await reply_long(update.message, "📚 درس‌های در دسترس:\n" + ("\n".join(f"• {x.id}: {x.name}" for x in subs) or "درسی در دسترس نیست."))
     elif t == "📝 تکالیف":
         context.user_data["state"] = "assigner_assignment"
-        await update.message.reply_text("📝 مدیریت تکالیف\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید. بعد از آن هر فیلد را جداگانه از شما می‌گیرم.")
+        await reply_long(update.message, "📝 مدیریت تکالیف\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید. بعد از آن هر فیلد را جداگانه از شما می‌گیرم.")
     elif t == "📢 ارسال اطلاعیه":
         context.user_data["state"] = "assigner_announcement"
-        await update.message.reply_text("📢 ارسال اطلاعیه\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان و متن اطلاعیه را جداگانه ارسال کنید. اطلاعیه برای کلاس‌های مجاز شما ارسال می‌شود.")
+        await reply_long(update.message, "📢 ارسال اطلاعیه\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان و متن اطلاعیه را جداگانه ارسال کنید. اطلاعیه برای کلاس‌های مجاز شما ارسال می‌شود.")
     elif t == "📅 برنامه هفتگی":
         context.user_data["state"] = "assigner_schedule"
-        await update.message.reply_text("📅 مدیریت برنامه هفتگی\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید. افزودن، برنامه‌های قبلی را حذف نمی‌کند.")
+        await reply_long(update.message, "📅 مدیریت برنامه هفتگی\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید. افزودن، برنامه‌های قبلی را حذف نمی‌کند.")
     elif t == "📝 امتحانات":
         context.user_data["state"] = "assigner_exam"
-        await update.message.reply_text("📝 مدیریت امتحانات\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید.")
+        await reply_long(update.message, "📝 مدیریت امتحانات\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید.")
     elif t == "📖 جزوات":
         context.user_data["state"] = "assigner_note_title"
-        await update.message.reply_text("📖 مدیریت جزوات\n\nابتدا «افزودن» یا «حذف» را ارسال کنید. در حالت افزودن، نام درس و عنوان جداگانه گرفته می‌شود و سپس فایل PDF را ارسال می‌کنید.")
+        await reply_long(update.message, "📖 مدیریت جزوات\n\nابتدا «افزودن» یا «حذف» را ارسال کنید. در حالت افزودن، نام درس و عنوان جداگانه گرفته می‌شود و سپس فایل PDF را ارسال می‌کنید.")
     elif t == "❓ سؤالات":
         async with SessionLocal() as s:
             allowed_ids = (await s.execute(select(Access.subject_id).where(Access.assigner_user_id == u.id, Access.subject_id.is_not(None)))).scalars().all()
@@ -574,88 +588,93 @@ async def show_assigner(update, context, u):
             q = await s.execute(q_stmt.order_by(Question.id.desc()).limit(30))
             data = q.all()
             if not data:
-                await update.message.reply_text("سؤال بازی وجود ندارد.")
+                await reply_long(update.message, "سؤال بازی وجود ندارد.")
             else:
-                await update.message.reply_text("\n".join(f"#{x.id} — {u2.name}\n{x.text}" for x, u2 in data))
+                await reply_long(update.message, "\n".join(f"#{x.id} — {u2.name}\n{x.text}" for x, u2 in data))
             context.user_data["state"] = "assigner_answer"
-            await update.message.reply_text("برای پاسخ، ابتدا شماره سؤال را در یک پیام و سپس متن پاسخ را در پیام بعدی ارسال کنید.")
+            await reply_long(update.message, "برای پاسخ، ابتدا شماره سؤال را در یک پیام و سپس متن پاسخ را در پیام بعدی ارسال کنید.")
     elif t == "🔔 اطلاعیه فردا":
         context.user_data["state"] = "assigner_tomorrow"
-        await update.message.reply_text("🔔 اطلاعیه فردا\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و زمان را جداگانه ارسال کنید.")
+        await reply_long(update.message, "🔔 اطلاعیه فردا\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و زمان را جداگانه ارسال کنید.")
     else:
-        await update.message.reply_text("پنل تعیین‌کننده آماده است.", reply_markup=keyboard(ASSIGNER_MENU))
+        await reply_long(update.message, "پنل تعیین‌کننده آماده است.", reply_markup=keyboard(ASSIGNER_MENU))
 
 
 async def show_admin(update, context, u):
     t = update.message.text
     if t == "👨‍🎓 مدیریت دانش‌آموزان":
         context.user_data["state"] = "admin_student"
-        await update.message.reply_text("👨‍🎓 مدیریت دانش‌آموزان\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
+        await reply_long(update.message, "👨‍🎓 مدیریت دانش‌آموزان\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "👤 مدیریت تعیین‌کنندگان":
         context.user_data["state"] = "admin_assigner"
-        await update.message.reply_text("👤 مدیریت تعیین‌کنندگان\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
+        await reply_long(update.message, "👤 مدیریت تعیین‌کنندگان\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "🏫 مدیریت کلاس‌ها":
         context.user_data["state"] = "admin_class"
-        await update.message.reply_text("🏫 مدیریت کلاس‌ها\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس اطلاعات لازم را جداگانه ارسال می‌کنم.")
+        await reply_long(update.message, "🏫 مدیریت کلاس‌ها\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس اطلاعات لازم را جداگانه ارسال می‌کنم.")
     elif t == "📚 مدیریت درس‌ها":
         context.user_data["state"] = "admin_subject"
-        await update.message.reply_text("📚 مدیریت درس‌ها\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
+        await reply_long(update.message, "📚 مدیریت درس‌ها\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "🔐 مدیریت دسترسی‌ها":
         context.user_data["state"] = "admin_access"
-        await update.message.reply_text("🔐 مدیریت دسترسی‌ها\n\nابتدا «افزودن» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
+        await reply_long(update.message, "🔐 مدیریت دسترسی‌ها\n\nابتدا «افزودن» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "📝 مدیریت تکالیف":
         context.user_data["state"] = "admin_assignment"
-        await update.message.reply_text("📝 مدیریت تکالیف\n\nابتدا عملیات را بفرستید؛ سپس عنوان، متن، درس و زمان هرکدام در پیام جداگانه دریافت می‌شود.")
+        await reply_long(update.message, "📝 مدیریت تکالیف\n\nابتدا عملیات را بفرستید؛ سپس عنوان، متن، درس و زمان هرکدام در پیام جداگانه دریافت می‌شود.")
     elif t == "📝 مدیریت امتحانات":
         context.user_data["state"] = "admin_exam"
-        await update.message.reply_text("📝 مدیریت امتحانات\n\nابتدا عملیات را بفرستید؛ سپس هر فیلد را در پیام جداگانه دریافت می‌کنم.")
+        await reply_long(update.message, "📝 مدیریت امتحانات\n\nابتدا عملیات را بفرستید؛ سپس هر فیلد را در پیام جداگانه دریافت می‌کنم.")
     elif t == "📖 مدیریت جزوات":
         context.user_data["state"] = "admin_note_title"
-        await update.message.reply_text("📖 مدیریت جزوات\\n\\nابتدا فقط نوع عملیات را ارسال کنید: افزودن / حذف\\nدر حالت افزودن، نام درس و عنوان جداگانه گرفته می‌شود و سپس فایل PDF را ارسال می‌کنید.")
+        await reply_long(update.message, "📖 مدیریت جزوات\\n\\nابتدا فقط نوع عملیات را ارسال کنید: افزودن / حذف\\nدر حالت افزودن، نام درس و عنوان جداگانه گرفته می‌شود و سپس فایل PDF را ارسال می‌کنید.")
     elif t == "📅 مدیریت برنامه هفتگی":
         context.user_data["state"] = "admin_schedule"
-        await update.message.reply_text("📅 مدیریت برنامه هفتگی\n\nابتدا عملیات را بفرستید؛ سپس کلاس، درس، روز و زنگ را جداگانه دریافت می‌کنم. افزودن، رکوردهای قبلی را حذف نمی‌کند.")
+        await reply_long(update.message, "📅 مدیریت برنامه هفتگی\n\nابتدا عملیات را بفرستید؛ سپس کلاس، درس، روز و زنگ را جداگانه دریافت می‌کنم. افزودن، رکوردهای قبلی را حذف نمی‌کند.")
     elif t in ("📢 مدیریت اطلاعیه‌ها", "📨 ارسال پیام همگانی"):
         context.user_data["state"] = "admin_announcement"
-        await update.message.reply_text("📢 مدیریت اطلاعیه‌ها\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و کلاس را جداگانه ارسال کنید. برای همه کلاس‌ها «همه» بنویسید.")
+        await reply_long(update.message, "📢 مدیریت اطلاعیه‌ها\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و کلاس را جداگانه ارسال کنید. برای همه کلاس‌ها «همه» بنویسید.")
     elif t == "🔔 اطلاعیه فردا":
         context.user_data["state"] = "admin_tomorrow"
-        await update.message.reply_text("🔔 اطلاعیه فردا\\n\\nابتدا «افزودن» را ارسال کنید؛ سپس عنوان، متن، زمان و کلاس را جداگانه می‌گیرم.")
+        await reply_long(update.message, "🔔 اطلاعیه فردا\\n\\nابتدا «افزودن» را ارسال کنید؛ سپس عنوان، متن، زمان و کلاس را جداگانه می‌گیرم.")
     elif t == "❓ مدیریت سؤالات":
         context.user_data["state"] = "admin_questions"
-        await update.message.reply_text("❓ مدیریت سؤالات\n\n«نمایش»، «پاسخ» یا «حذف» را ارسال کنید؛ سپس اطلاعات لازم را جداگانه می‌گیرم.")
+        await reply_long(update.message, "❓ مدیریت سؤالات\n\n«نمایش»، «پاسخ» یا «حذف» را ارسال کنید؛ سپس اطلاعات لازم را جداگانه می‌گیرم.")
     elif t == "👥 مدیریت کاربران":
         context.user_data["state"] = "admin_users"
-        await update.message.reply_text("👥 مدیریت کاربران\n\n«نمایش»، «فعال»، «غیرفعال» یا «تغییر نقش» را ارسال کنید؛ سپس اطلاعات لازم را جداگانه وارد می‌کنید.")
+        await reply_long(update.message, "👥 مدیریت کاربران\n\n«نمایش»، «فعال»، «غیرفعال» یا «تغییر نقش» را ارسال کنید؛ سپس اطلاعات لازم را جداگانه وارد می‌کنید.")
     elif t in ("📊 گزارش‌ها", "📋 گزارش فعالیت‌ها", "🕐 تاریخچه تغییرات"):
         async with SessionLocal() as s:
             users = await s.scalar(select(User).count()) if False else None
             logs = (await s.execute(select(ActivityLog).order_by(ActivityLog.id.desc()).limit(30))).scalars().all()
-            await update.message.reply_text(f"📊 آخرین فعالیت‌ها:\n" + ("\n".join(f"{x.created_at.astimezone(TZ).strftime('%m/%d %H:%M')} | {x.action} | {x.details}" for x in logs) or "هنوز فعالیتی ثبت نشده."))
+            await reply_long(update.message, f"📊 آخرین فعالیت‌ها:\n" + ("\n".join(f"{x.created_at.astimezone(TZ).strftime('%m/%d %H:%M')} | {x.action} | {x.details}" for x in logs) or "هنوز فعالیتی ثبت نشده."))
     elif t == "🗂️ مدیریت فایل‌ها":
         context.user_data["state"] = "admin_files"
-        await update.message.reply_text("🗂️ مدیریت فایل‌ها\n\nبرای فهرست فایل‌ها «نمایش» و برای حذف یک فایل «حذف» را ارسال کنید؛ شناسه فایل را در پیام بعدی می‌گیرم.")
+        await reply_long(update.message, "🗂️ مدیریت فایل‌ها\n\nبرای فهرست فایل‌ها «نمایش» و برای حذف یک فایل «حذف» را ارسال کنید؛ شناسه فایل را در پیام بعدی می‌گیرم.")
     elif t == "⚙️ تنظیمات بات":
-        await update.message.reply_text(f"⚙️ تنظیمات فعال\nمنطقه زمانی: {TIMEZONE}\nپایگاه‌داده: {'PostgreSQL' if 'postgres' in DATABASE_URL else 'سایر'}")
+        await reply_long(update.message, f"⚙️ تنظیمات فعال\nمنطقه زمانی: {TIMEZONE}\nپایگاه‌داده: {'PostgreSQL' if 'postgres' in DATABASE_URL else 'سایر'}")
     elif t == "🗄️ مدیریت دیتابیس":
         async with SessionLocal() as s:
-            await update.message.reply_text("اتصال دیتابیس برقرار است." if await s.scalar(select(1)) == 1 else "خطا در دیتابیس.")
+            await reply_long(update.message, "اتصال دیتابیس برقرار است." if await s.scalar(select(1)) == 1 else "خطا در دیتابیس.")
     elif t == "🔒 تنظیمات امنیتی":
-        await update.message.reply_text("امنیت: توکن فقط از متغیر محیطی خوانده می‌شود؛ نقش‌ها در DB کنترل می‌شوند؛ اطلاعات حساس در GitHub ذخیره نشده است.")
+        await reply_long(update.message, "امنیت: توکن فقط از متغیر محیطی خوانده می‌شود؛ نقش‌ها در DB کنترل می‌شوند؛ اطلاعات حساس در GitHub ذخیره نشده است.")
     elif t == "🔔 ارسال اعلان":
         context.user_data["state"] = "admin_announcement"
-        await update.message.reply_text("📨 ارسال اعلان\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و کلاس را جداگانه ارسال کنید.")
+        await reply_long(update.message, "📨 ارسال اعلان\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و کلاس را جداگانه ارسال کنید.")
     elif t == "👨‍🎓 مدیریت تعیین‌کنندگان":
         pass
     else:
-        await update.message.reply_text("پنل مدیریت آماده است.", reply_markup=keyboard(ADMIN_MENU))
+        await reply_long(update.message, "پنل مدیریت آماده است.", reply_markup=keyboard(ADMIN_MENU))
 
 
 def parse_dt(value: str) -> datetime | None:
-    value = value.strip()
+    value = (value or "").strip()
     if not value:
         return None
-    return datetime.strptime(value, "%Y-%m-%d %H:%M").replace(tzinfo=TZ).astimezone(timezone.utc)
+    # Accept Persian/Arabic-Indic digits as well as Latin digits.
+    value = value.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M").replace(tzinfo=TZ).astimezone(timezone.utc)
+    except ValueError:
+        return None
 
 
 async def get_class_by_name(s, name):
@@ -663,7 +682,10 @@ async def get_class_by_name(s, name):
 
 
 async def get_subject_by_name(s, name):
-    return (await s.execute(select(Subject).where(Subject.name == name.strip()))).scalars().first()
+    rows = (await s.execute(select(Subject).where(Subject.name == name.strip()))).scalars().all()
+    if len(rows) > 1:
+        raise ValueError("نام این درس در چند کلاس تکرار شده است؛ برای انتخاب دقیق‌تر، ابتدا نام درس را یکتا کنید.")
+    return rows[0] if rows else None
 
 
 async def notify_class(bot, class_id: int | None, text: str, announcement_id: int):
@@ -713,7 +735,7 @@ async def notify_class(bot, class_id: int | None, text: str, announcement_id: in
     async def send_one(user_id, telegram_id):
         async with semaphore:
             try:
-                await bot.send_message(telegram_id, text)
+                await send_long(bot, telegram_id, text)
                 return user_id, "SENT", ""
             except Exception as e:
                 return user_id, "FAILED", str(e)[:1000]
@@ -780,18 +802,18 @@ async def process_state(update, context, u):
     if state == "auth_student_school_code":
         school_code = text.strip()
         if not school_code:
-            await update.message.reply_text("❌ کد مدرسه نمی‌تواند خالی باشد. دوباره ارسال کنید:")
+            await reply_long(update.message, "❌ کد مدرسه نمی‌تواند خالی باشد. دوباره ارسال کنید:")
             return True
         context.user_data["school_code"] = school_code
         context.user_data["state"] = "auth_student_name"
-        await update.message.reply_text("حالا نام و نام خانوادگی را ارسال کنید:")
+        await reply_long(update.message, "حالا نام و نام خانوادگی را ارسال کنید:")
         return True
 
     if state == "auth_student_name":
         name = text.strip()
         school_code = context.user_data.get("school_code", "").strip()
         if not name:
-            await update.message.reply_text("❌ نام نمی‌تواند خالی باشد. دوباره ارسال کنید:")
+            await reply_long(update.message, "❌ نام نمی‌تواند خالی باشد. دوباره ارسال کنید:")
             return True
         async with SessionLocal() as s:
             q = await s.execute(
@@ -803,11 +825,11 @@ async def process_state(update, context, u):
             )
             rows = q.all()
             if len(rows) != 1:
-                await update.message.reply_text("❌ اطلاعات ورود پیدا نشد. کد مدرسه یا نام را بررسی کنید.")
+                await reply_long(update.message, "❌ اطلاعات ورود پیدا نشد. کد مدرسه یا نام را بررسی کنید.")
                 return True
             st, account = rows[0]
             if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
-                await update.message.reply_text("❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
+                await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
                 return True
             account.telegram_id = update.effective_user.id
             account.active = True
@@ -821,29 +843,29 @@ async def process_state(update, context, u):
     if state == "auth_assigner_username":
         username = text.strip()
         if not username:
-            await update.message.reply_text("❌ نام کاربری نمی‌تواند خالی باشد. دوباره ارسال کنید:")
+            await reply_long(update.message, "❌ نام کاربری نمی‌تواند خالی باشد. دوباره ارسال کنید:")
             return True
         context.user_data["login_username"] = username
         context.user_data["state"] = "auth_assigner_password"
-        await update.message.reply_text("حالا رمز عبور را ارسال کنید:")
+        await reply_long(update.message, "حالا رمز عبور را ارسال کنید:")
         return True
 
     if state == "auth_assigner_password":
         username = context.user_data.get("login_username", "").strip()
         password = text
         if not password:
-            await update.message.reply_text("❌ رمز عبور نمی‌تواند خالی باشد. دوباره ارسال کنید:")
+            await reply_long(update.message, "❌ رمز عبور نمی‌تواند خالی باشد. دوباره ارسال کنید:")
             return True
         async with SessionLocal() as s:
             account = (await s.execute(
                 select(User).where(User.login_username == username, User.role == "ASSIGNER")
             )).scalar_one_or_none()
             if not account or not verify_password(password, account.password_hash):
-                await update.message.reply_text("❌ نام کاربری یا رمز عبور نادرست است. دوباره /start را بزنید.")
+                await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است. دوباره /start را بزنید.")
                 context.user_data.clear()
                 return True
             if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
-                await update.message.reply_text("❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
+                await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
                 return True
             account.telegram_id = update.effective_user.id
             account.active = True
@@ -864,13 +886,13 @@ async def process_state(update, context, u):
             state = "auth_student_name"
         else:
             context.user_data["state"] = "auth_student_school_code"
-            await update.message.reply_text("ابتدا کد مدرسه را ارسال کنید:")
+            await reply_long(update.message, "ابتدا کد مدرسه را ارسال کنید:")
             return True
     if state == "auth_student_name" and "school_code" in context.user_data:
         name = text.strip()
         code = context.user_data.get("school_code", "").strip()
         if not name:
-            await update.message.reply_text("❌ نام نمی‌تواند خالی باشد. دوباره ارسال کنید:")
+            await reply_long(update.message, "❌ نام نمی‌تواند خالی باشد. دوباره ارسال کنید:")
             return True
         async with SessionLocal() as s:
             q = await s.execute(
@@ -882,11 +904,11 @@ async def process_state(update, context, u):
             )
             rows = q.all()
             if len(rows) != 1:
-                await update.message.reply_text("❌ اطلاعات ورود پیدا نشد. کد مدرسه و نام را دقیقاً مطابق اطلاعات ثبت‌شده توسط مدیریت وارد کنید.")
+                await reply_long(update.message, "❌ اطلاعات ورود پیدا نشد. کد مدرسه و نام را دقیقاً مطابق اطلاعات ثبت‌شده توسط مدیریت وارد کنید.")
                 return True
             st, account = rows[0]
             if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
-                await update.message.reply_text("❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
+                await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
                 return True
             account.telegram_id = update.effective_user.id
             account.active = True
@@ -906,7 +928,7 @@ async def process_state(update, context, u):
             state = "auth_assigner_password"
         else:
             context.user_data["state"] = "auth_assigner_username"
-            await update.message.reply_text("ابتدا نام کاربری را ارسال کنید:")
+            await reply_long(update.message, "ابتدا نام کاربری را ارسال کنید:")
             return True
     if state == "auth_assigner_password" and "login_username" in context.user_data:
         username = context.user_data.get("login_username", "").strip()
@@ -916,10 +938,10 @@ async def process_state(update, context, u):
                 select(User).where(User.login_username == username, User.role == "ASSIGNER", User.active.is_(True))
             )).scalar_one_or_none()
             if not account or not verify_password(password, account.password_hash):
-                await update.message.reply_text("❌ نام کاربری یا رمز عبور نادرست است.")
+                await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است.")
                 return True
             if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
-                await update.message.reply_text("❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
+                await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
                 return True
             account.telegram_id = update.effective_user.id
             await s.commit()
@@ -932,11 +954,11 @@ async def process_state(update, context, u):
     if state == "student_question_subject":
         subject_name = text.strip()
         if not subject_name:
-            await update.message.reply_text("نام درس نمی‌تواند خالی باشد. نام درس یا «عمومی» را ارسال کنید:")
+            await reply_long(update.message, "نام درس نمی‌تواند خالی باشد. نام درس یا «عمومی» را ارسال کنید:")
             return True
         context.user_data["question_subject"] = subject_name
         context.user_data["state"] = "student_question_text"
-        await update.message.reply_text("حالا متن سؤال را در پیام بعدی ارسال کنید:")
+        await reply_long(update.message, "حالا متن سؤال را در پیام بعدی ارسال کنید:")
         return True
 
     if state == "student_question_text":
@@ -944,7 +966,7 @@ async def process_state(update, context, u):
         subject_name = context.user_data.get("question_subject", "").strip()
         question_text = text.strip()
         if not question_text:
-            await update.message.reply_text("متن سؤال خالی است. دوباره ارسال کنید یا «انصراف» را بزنید.")
+            await reply_long(update.message, "متن سؤال خالی است. دوباره ارسال کنید یا «انصراف» را بزنید.")
             return True
         try:
             async with SessionLocal() as s:
@@ -995,7 +1017,7 @@ async def process_state(update, context, u):
                 async with semaphore:
                     try:
                         if recipient.telegram_id:
-                            await context.bot.send_message(
+                            await send_long(context.bot, 
                                 recipient.telegram_id,
                                 f"❓ سؤال جدید #{question_id}\n👨‍🎓 {u.name}\n{question_text}",
                             )
@@ -1007,12 +1029,12 @@ async def process_state(update, context, u):
                 return_exceptions=True,
             )
             context.user_data.clear()
-            await update.message.reply_text("سؤال شما ثبت شد و برای تعیین‌کننده/مدیریت ارسال شد. اگر درس را مشخص کرده باشید، فقط تعیین‌کنندگان مجاز همان درس آن را می‌بینند.", reply_markup=keyboard(STUDENT_MENU))
+            await reply_long(update.message, "سؤال شما ثبت شد و برای تعیین‌کننده/مدیریت ارسال شد. اگر درس را مشخص کرده باشید، فقط تعیین‌کنندگان مجاز همان درس آن را می‌بینند.", reply_markup=keyboard(STUDENT_MENU))
         except ValueError as e:
-            await update.message.reply_text(f"❌ {e}\nدوباره بفرستید یا «انصراف» را بزنید.")
+            await reply_long(update.message, f"❌ {e}\nدوباره بفرستید یا «انصراف» را بزنید.")
         except Exception:
             log.exception("student question flow failed")
-            await update.message.reply_text("❌ ثبت سؤال انجام نشد. وضعیت شما حفظ شد؛ دوباره تلاش کنید.")
+            await reply_long(update.message, "❌ ثبت سؤال انجام نشد. وضعیت شما حفظ شد؛ دوباره تلاش کنید.")
         return True
 
 
@@ -1096,9 +1118,9 @@ async def process_state(update, context, u):
                 fields = admin_wizard_specs[state][text]
                 context.user_data["admin_flow"]["fields"] = fields
                 if fields:
-                    await update.message.reply_text(fields[0][1])
+                    await reply_long(update.message, fields[0][1])
                 return True
-            await update.message.reply_text("عملیات را جداگانه ارسال کنید: «افزودن» یا «ویرایش» یا «حذف».")
+            await reply_long(update.message, "عملیات را جداگانه ارسال کنید: «افزودن» یا «ویرایش» یا «حذف».")
             return True
         fields = flow["fields"]
         i = flow["i"]
@@ -1106,7 +1128,7 @@ async def process_state(update, context, u):
         i += 1
         if i < len(fields):
             flow["i"] = i
-            await update.message.reply_text(fields[i][1])
+            await reply_long(update.message, fields[i][1])
             return True
         action = flow["action"]
         vals = flow["values"]
@@ -1133,18 +1155,18 @@ async def process_state(update, context, u):
             if action == "افزودن":
                 context.user_data["note_meta"] = vals
                 context.user_data["state"] = "admin_note_file"
-                await update.message.reply_text("حالا فایل PDF جزوه را ارسال کنید. جزوه‌های قبلی حذف نمی‌شوند و این جزوه به فهرست اضافه می‌شود.")
+                await reply_long(update.message, "حالا فایل PDF جزوه را ارسال کنید. جزوه‌های قبلی حذف نمی‌شوند و این جزوه به فهرست اضافه می‌شود.")
                 return True
             if action == "حذف":
                 async with SessionLocal() as s2:
                     n=await s2.get(Note,int(vals[0]))
                     if not n:
-                        await update.message.reply_text("❌ جزوه پیدا نشد.")
+                        await reply_long(update.message, "❌ جزوه پیدا نشد.")
                         context.user_data.clear()
                         return True
                     await s2.delete(n); await s2.commit()
                 context.user_data.clear()
-                await update.message.reply_text("✅ جزوه حذف شد.")
+                await reply_long(update.message, "✅ جزوه حذف شد.")
                 return True
         elif state == "admin_announcement":
             text = action + "|" + "|".join(vals)
@@ -1171,14 +1193,14 @@ async def process_state(update, context, u):
                         lines=[]
                         for x in rows:
                             lines.append(f"#{x.id} | {x.name or 'بدون نام'} | {ROLE_NAMES.get(x.role,x.role)} | {'فعال' if x.active else 'غیرفعال'}")
-                        await update.message.reply_text("👥 کاربران:\n" + ("\n".join(lines) or "کاربری ثبت نشده."))
+                        await reply_long(update.message, "👥 کاربران:\n" + ("\n".join(lines) or "کاربری ثبت نشده."))
                     elif action in ("فعال","غیرفعال") and len(parts)==2:
                         target=await s.get(User,int(parts[1]))
                         if not target: raise ValueError("کاربر پیدا نشد.")
                         if target.role=="ADMIN" and action=="غیرفعال": raise ValueError("حساب مدیریت اصلی قابل غیرفعال‌کردن نیست.")
                         target.active=(action=="فعال")
                         await s.commit(); await log_action(u.id,"user_status_changed",f"{target.id}|{action}")
-                        await update.message.reply_text("✅ وضعیت کاربر تغییر کرد.")
+                        await reply_long(update.message, "✅ وضعیت کاربر تغییر کرد.")
                     elif action=="تغییر نقش" and len(parts)==3:
                         target=await s.get(User,int(parts[1])); role=parts[2].upper()
                         role_map={"دانش‌آموز":"STUDENT","تعیین‌کننده":"ASSIGNER","مدیریت":"ADMIN","STUDENT":"STUDENT","ASSIGNER":"ASSIGNER","ADMIN":"ADMIN","PENDING":"PENDING"}
@@ -1187,19 +1209,19 @@ async def process_state(update, context, u):
                         if target.id==u.id and role!="ADMIN": raise ValueError("نقش مدیریت حساب جاری را نمی‌توانید حذف کنید.")
                         target.role=role; target.active=(role!="PENDING")
                         await s.commit(); await log_action(u.id,"user_role_changed",f"{target.id}|{role}")
-                        await update.message.reply_text("✅ نقش کاربر تغییر کرد.")
+                        await reply_long(update.message, "✅ نقش کاربر تغییر کرد.")
                     else:
                         raise ValueError("فرمت عملیات کاربران درست نیست.")
                 elif state == "admin_files":
                     parts=[x.strip() for x in text.split("|",1)]
                     if parts[0]=="نمایش":
                         rows=(await s.execute(select(Note).order_by(Note.id.desc()).limit(50))).scalars().all()
-                        await update.message.reply_text("🗂️ فایل‌های جزوات:\n"+("\n".join(f"#{n.id} | {n.file_name or 'PDF'} | {n.title}" for n in rows) or "فایلی ثبت نشده."))
+                        await reply_long(update.message, "🗂️ فایل‌های جزوات:\n"+("\n".join(f"#{n.id} | {n.file_name or 'PDF'} | {n.title}" for n in rows) or "فایلی ثبت نشده."))
                     elif parts[0]=="حذف" and len(parts)==2:
                         n=await s.get(Note,int(parts[1]))
                         if not n: raise ValueError("فایل پیدا نشد.")
                         await s.delete(n); await s.commit(); await log_action(u.id,"note_deleted",parts[1])
-                        await update.message.reply_text("✅ فایل/جزوه حذف شد.")
+                        await reply_long(update.message, "✅ فایل/جزوه حذف شد.")
                     else:
                         raise ValueError("فرمت مدیریت فایل درست نیست.")
                 elif state == "admin_user":
@@ -1216,31 +1238,31 @@ async def process_state(update, context, u):
                     await s.commit()
                     if role != "PENDING":
                         try:
-                            await context.bot.send_message(
+                            await send_long(context.bot, 
                                 target.telegram_id,
                                 f"✅ نقش حساب شما توسط مدیریت تعیین شد.\\nنقش شما: {ROLE_NAMES[role]}\\nبرای ورود /start را بزنید."
                             )
                         except Exception:
                             log.exception("role notification failed")
                     await log_action(u.id, "user_role_changed", f"{tid}|{role}")
-                    await update.message.reply_text("نقش کاربر با موفقیت تغییر کرد.")
+                    await reply_long(update.message, "نقش کاربر با موفقیت تغییر کرد.")
                 elif state == "admin_class":
                     p=[x.strip() for x in text.split("|")]
                     if not p[0]: raise ValueError("عملیات مشخص نشده است.")
                     if p[0] == "افزودن" and len(p)==2:
                         if await get_class_by_name(s,p[1]): raise ValueError("این کلاس از قبل وجود دارد.")
-                        s.add(ClassRoom(name=p[1])); await s.commit(); await update.message.reply_text("✅ کلاس اضافه شد.")
+                        s.add(ClassRoom(name=p[1])); await s.commit(); await reply_long(update.message, "✅ کلاس اضافه شد.")
                     elif p[0] == "ویرایش" and len(p)==3:
                         old,new=p[1],p[2]; c0=await get_class_by_name(s,old)
                         if not c0: raise ValueError("کلاس پیدا نشد.")
                         if await get_class_by_name(s,new): raise ValueError("نام جدید قبلاً استفاده شده است.")
-                        c0.name=new; await s.commit(); await update.message.reply_text("✅ نام کلاس ویرایش شد.")
+                        c0.name=new; await s.commit(); await reply_long(update.message, "✅ نام کلاس ویرایش شد.")
                     elif p[0] == "حذف" and len(p)==2:
                         c0=await get_class_by_name(s,p[1])
                         if not c0: raise ValueError("کلاس پیدا نشد.")
                         deps=[await s.scalar(select(Student.id).where(Student.class_id==c0.id).limit(1)),await s.scalar(select(Subject.id).where(Subject.class_id==c0.id).limit(1)),await s.scalar(select(Access.id).where(Access.class_id==c0.id).limit(1)),await s.scalar(select(Schedule.id).where(Schedule.class_id==c0.id).limit(1)),await s.scalar(select(Announcement.id).where(Announcement.class_id==c0.id).limit(1))]
                         if any(x is not None for x in deps): raise ValueError("این کلاس هنوز وابستگی دارد؛ ابتدا آن‌ها را مدیریت کنید.")
-                        await s.delete(c0); await s.commit(); await update.message.reply_text("✅ کلاس حذف شد.")
+                        await s.delete(c0); await s.commit(); await reply_long(update.message, "✅ کلاس حذف شد.")
                     else: raise ValueError("فرمت: افزودن|نام کلاس / ویرایش|نام قبلی|نام جدید / حذف|نام کلاس")
                 elif state == "admin_student":
                     p=[x.strip() for x in text.split("|")]
@@ -1252,19 +1274,19 @@ async def process_state(update, context, u):
                         if exists: raise ValueError("این دانش‌آموز قبلاً ثبت شده است.")
                         target=User(telegram_id=None,name=name,role="STUDENT",active=True); s.add(target); await s.flush()
                         s.add(Student(user_id=target.id,class_id=c0.id,school_code=school_code,login_name=norm_name(name))); await s.commit()
-                        await log_action(u.id,"student_provisioned",f"{school_code}|{name}|{c0.name}"); await update.message.reply_text("✅ حساب دانش‌آموز ثبت شد.")
+                        await log_action(u.id,"student_provisioned",f"{school_code}|{name}|{c0.name}"); await reply_long(update.message, "✅ حساب دانش‌آموز ثبت شد.")
                     elif p[0]=="ویرایش" and len(p)==5:
                         st=await s.get(Student,int(p[1])); c0=await get_class_by_name(s,p[4])
                         if not st or not c0: raise ValueError("دانش‌آموز یا کلاس پیدا نشد.")
                         st.school_code,st.login_name,st.class_id=p[2],norm_name(p[3]),c0.id
                         target=await s.get(User,st.user_id); target.name=p[3]; target.active=True
-                        await s.commit(); await update.message.reply_text("✅ اطلاعات دانش‌آموز ویرایش شد.")
+                        await s.commit(); await reply_long(update.message, "✅ اطلاعات دانش‌آموز ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         st=await s.get(Student,int(p[1]))
                         if not st: raise ValueError("دانش‌آموز پیدا نشد.")
                         target=await s.get(User,st.user_id); await s.delete(st)
                         if target: target.role,target.active,target.telegram_id="PENDING",False,None
-                        await s.commit(); await update.message.reply_text("✅ دانش‌آموز حذف و حساب او غیرفعال شد.")
+                        await s.commit(); await reply_long(update.message, "✅ دانش‌آموز حذف و حساب او غیرفعال شد.")
                     else: raise ValueError("فرمت: افزودن|کد مدرسه|نام|کلاس / ویرایش|شناسه|کد|نام|کلاس / حذف|شناسه")
                 elif state == "admin_assigner":
                     p=[x.strip() for x in text.split("|")]
@@ -1272,7 +1294,7 @@ async def process_state(update, context, u):
                         username,password,name=p[1:]
                         if len(password)<6: raise ValueError("رمز عبور باید حداقل ۶ کاراکتر باشد.")
                         if await s.scalar(select(User.id).where(User.login_username==username).limit(1)): raise ValueError("نام کاربری تکراری است.")
-                        target=User(telegram_id=None,name=name,role="ASSIGNER",active=True,login_username=username,password_hash=hash_password(password)); s.add(target); await s.commit(); await log_action(u.id,"assigner_provisioned",username); await update.message.reply_text("✅ تعیین‌کننده ثبت شد.")
+                        target=User(telegram_id=None,name=name,role="ASSIGNER",active=True,login_username=username,password_hash=hash_password(password)); s.add(target); await s.commit(); await log_action(u.id,"assigner_provisioned",username); await reply_long(update.message, "✅ تعیین‌کننده ثبت شد.")
                     elif p[0]=="ویرایش" and len(p)==5:
                         target=await s.get(User,int(p[1]))
                         if not target or target.role!="ASSIGNER": raise ValueError("تعیین‌کننده پیدا نشد.")
@@ -1280,12 +1302,12 @@ async def process_state(update, context, u):
                         duplicate=await s.scalar(select(User.id).where(User.login_username==p[2],User.id!=target.id).limit(1))
                         if duplicate: raise ValueError("نام کاربری جدید تکراری است.")
                         target.login_username,target.password_hash,target.name,target.active=p[2],hash_password(p[3]),p[4],True
-                        await s.commit(); await update.message.reply_text("✅ تعیین‌کننده ویرایش شد.")
+                        await s.commit(); await reply_long(update.message, "✅ تعیین‌کننده ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         target=await s.get(User,int(p[1]))
                         if not target or target.role!="ASSIGNER": raise ValueError("تعیین‌کننده پیدا نشد.")
                         target.role,target.active,target.telegram_id,target.login_username,target.password_hash="PENDING",False,None,None,None
-                        await s.commit(); await update.message.reply_text("✅ تعیین‌کننده حذف و حساب او غیرفعال شد.")
+                        await s.commit(); await reply_long(update.message, "✅ تعیین‌کننده حذف و حساب او غیرفعال شد.")
                     else: raise ValueError("فرمت: افزودن|نام کاربری|رمز|نام / ویرایش|شناسه|نام کاربری|رمز|نام / حذف|شناسه")
                 elif state == "admin_subject":
                     p=[x.strip() for x in text.split("|")]
@@ -1295,18 +1317,18 @@ async def process_state(update, context, u):
                         if not c0: raise ValueError("کلاس وجود ندارد.")
                         exists=await s.scalar(select(Subject.id).where(Subject.name==name,Subject.class_id==c0.id).limit(1))
                         if exists: raise ValueError("این درس قبلاً در کلاس ثبت شده است.")
-                        s.add(Subject(name=name,class_id=c0.id,teacher_name=teacher)); await s.commit(); await update.message.reply_text("✅ درس ثبت شد.")
+                        s.add(Subject(name=name,class_id=c0.id,teacher_name=teacher)); await s.commit(); await reply_long(update.message, "✅ درس ثبت شد.")
                     elif p[0]=="ویرایش" and len(p)==4:
                         sub=await s.get(Subject,int(p[1]))
                         c0=await get_class_by_name(s,p[3])
                         if not sub or not c0: raise ValueError("درس یا کلاس پیدا نشد.")
-                        sub.name,sub.class_id=p[2],c0.id; await s.commit(); await update.message.reply_text("✅ درس ویرایش شد.")
+                        sub.name,sub.class_id=p[2],c0.id; await s.commit(); await reply_long(update.message, "✅ درس ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         sub=await s.get(Subject,int(p[1]))
                         if not sub: raise ValueError("درس پیدا نشد.")
                         deps=[await s.scalar(select(Assignment.id).where(Assignment.subject_id==sub.id).limit(1)),await s.scalar(select(Exam.id).where(Exam.subject_id==sub.id).limit(1)),await s.scalar(select(Schedule.id).where(Schedule.subject_id==sub.id).limit(1)),await s.scalar(select(Note.id).where(Note.subject_id==sub.id).limit(1)),await s.scalar(select(Question.id).where(Question.subject_id==sub.id).limit(1))]
                         if any(x is not None for x in deps): raise ValueError("این درس هنوز وابستگی دارد؛ ابتدا وابستگی‌ها را مدیریت کنید.")
-                        await s.delete(sub); await s.commit(); await update.message.reply_text("✅ درس حذف شد.")
+                        await s.delete(sub); await s.commit(); await reply_long(update.message, "✅ درس حذف شد.")
                     else: raise ValueError("فرمت عملیات درس درست نیست.")
                 elif state == "admin_access":
                     p=[x.strip() for x in text.split("|")]
@@ -1316,11 +1338,11 @@ async def process_state(update, context, u):
                         c0=await get_class_by_name(s,clsname); sub=(await s.execute(select(Subject).where(Subject.name==subname,Subject.class_id==c0.id))).scalar_one_or_none() if c0 else None
                         if not au or not c0 or not sub: raise ValueError("تعیین‌کننده، کلاس یا درس پیدا نشد.")
                         if await s.scalar(select(Access.id).where(Access.assigner_user_id==au.id,Access.class_id==c0.id,Access.subject_id==sub.id).limit(1)): raise ValueError("این دسترسی از قبل ثبت شده است.")
-                        s.add(Access(assigner_user_id=au.id,class_id=c0.id,subject_id=sub.id)); await s.commit(); await update.message.reply_text("✅ دسترسی ثبت شد.")
+                        s.add(Access(assigner_user_id=au.id,class_id=c0.id,subject_id=sub.id)); await s.commit(); await reply_long(update.message, "✅ دسترسی ثبت شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         acc=await s.get(Access,int(p[1]))
                         if not acc: raise ValueError("دسترسی پیدا نشد.")
-                        await s.delete(acc); await s.commit(); await update.message.reply_text("✅ دسترسی حذف شد.")
+                        await s.delete(acc); await s.commit(); await reply_long(update.message, "✅ دسترسی حذف شد.")
                     else: raise ValueError("فرمت: افزودن|نام کاربری|نام کلاس|نام درس / حذف|شناسه")
                 elif state in ("admin_assignment", "admin_exam"):
                     p=[x.strip() for x in text.split("|")]
@@ -1329,17 +1351,17 @@ async def process_state(update, context, u):
                             sub=await get_subject_by_name(s,p[1])
                             if not sub: raise ValueError("درس پیدا نشد.")
                             due=parse_dt(p[4]) if len(p)>4 else None
-                            s.add(Assignment(subject_id=sub.id,title=p[2],body=p[3],due_at=due,created_by=u.id)); await s.commit(); await create_announcement(context.bot,"تکلیف جدید: "+p[2],p[3],sub.class_id,"announcement",None,u.id); await update.message.reply_text("✅ تکلیف ثبت شد و اطلاع‌رسانی شد.")
+                            s.add(Assignment(subject_id=sub.id,title=p[2],body=p[3],due_at=due,created_by=u.id)); await s.commit(); await create_announcement(context.bot,"تکلیف جدید: "+p[2],p[3],sub.class_id,"announcement",None,u.id); await reply_long(update.message, "✅ تکلیف ثبت شد و اطلاع‌رسانی شد.")
                         elif p[0]=="ویرایش" and len(p)>=6:
                             a=await s.get(Assignment,int(p[1])); sub=await get_subject_by_name(s,p[2])
                             if not a or not sub: raise ValueError("تکلیف یا درس پیدا نشد.")
                             new_due=None if p[5]=="ندارد" else parse_dt(p[5])
                             if p[5]!="ندارد" and new_due is None: raise ValueError("مهلت نامعتبر است.")
-                            a.subject_id,a.title,a.body,a.due_at=sub.id,p[3],p[4],new_due; await s.commit(); await update.message.reply_text("✅ تکلیف ویرایش شد.")
+                            a.subject_id,a.title,a.body,a.due_at=sub.id,p[3],p[4],new_due; await s.commit(); await reply_long(update.message, "✅ تکلیف ویرایش شد.")
                         elif p[0]=="حذف" and len(p)==2:
                             a=await s.get(Assignment,int(p[1]))
                             if not a: raise ValueError("تکلیف پیدا نشد.")
-                            await s.delete(a); await s.commit(); await update.message.reply_text("✅ تکلیف حذف شد.")
+                            await s.delete(a); await s.commit(); await reply_long(update.message, "✅ تکلیف حذف شد.")
                         else: raise ValueError("فرمت تکلیف درست نیست.")
                     else:
                         if p[0]=="افزودن" and len(p)>=4:
@@ -1348,39 +1370,39 @@ async def process_state(update, context, u):
                             exam_at=parse_dt(p[3])
                             if exam_at is None: raise ValueError("تاریخ امتحان الزامی است.")
                             details=p[4] if len(p)>4 else ""
-                            s.add(Exam(subject_id=sub.id,title=p[2],exam_at=exam_at,details=details,created_by=u.id)); await s.commit(); await create_announcement(context.bot,"امتحان جدید: "+p[2],details,sub.class_id,"announcement",None,u.id); await update.message.reply_text("✅ امتحان ثبت شد و اطلاع‌رسانی شد.")
+                            s.add(Exam(subject_id=sub.id,title=p[2],exam_at=exam_at,details=details,created_by=u.id)); await s.commit(); await create_announcement(context.bot,"امتحان جدید: "+p[2],details,sub.class_id,"announcement",None,u.id); await reply_long(update.message, "✅ امتحان ثبت شد و اطلاع‌رسانی شد.")
                         elif p[0]=="ویرایش" and len(p)>=6:
                             e=await s.get(Exam,int(p[1])); sub=await get_subject_by_name(s,p[2])
                             if not e or not sub: raise ValueError("امتحان یا درس پیدا نشد.")
                             new_dt=parse_dt(p[4])
                             if new_dt is None: raise ValueError("تاریخ و ساعت امتحان نامعتبر است.")
-                            e.subject_id,e.title,e.exam_at,e.details=sub.id,p[3],new_dt,p[5]; await s.commit(); await update.message.reply_text("✅ امتحان ویرایش شد.")
+                            e.subject_id,e.title,e.exam_at,e.details=sub.id,p[3],new_dt,p[5]; await s.commit(); await reply_long(update.message, "✅ امتحان ویرایش شد.")
                         elif p[0]=="حذف" and len(p)==2:
                             e=await s.get(Exam,int(p[1]))
                             if not e: raise ValueError("امتحان پیدا نشد.")
-                            await s.delete(e); await s.commit(); await update.message.reply_text("✅ امتحان حذف شد.")
+                            await s.delete(e); await s.commit(); await reply_long(update.message, "✅ امتحان حذف شد.")
                         else: raise ValueError("فرمت امتحان درست نیست.")
                 elif state == "admin_schedule":
                     p=[x.strip() for x in text.split("|")]
                     if p[0]=="افزودن" and len(p)==5:
                         c0=await get_class_by_name(s,p[1]); sub=await get_subject_by_name(s,p[2])
                         if not c0 or not sub: raise ValueError("کلاس یا درس پیدا نشد.")
-                        s.add(Schedule(class_id=c0.id,subject_id=sub.id,weekday=p[3],period=p[4])); await s.commit(); await create_announcement(context.bot,"تغییر برنامه هفتگی",f"{sub.name} - {p[3]} - {p[4]}",c0.id,"announcement",None,u.id); await update.message.reply_text("✅ برنامه ثبت شد و اطلاع‌رسانی شد.")
+                        s.add(Schedule(class_id=c0.id,subject_id=sub.id,weekday=p[3],period=p[4])); await s.commit(); await create_announcement(context.bot,"تغییر برنامه هفتگی",f"{sub.name} - {p[3]} - {p[4]}",c0.id,"announcement",None,u.id); await reply_long(update.message, "✅ برنامه ثبت شد و اطلاع‌رسانی شد.")
                     elif p[0]=="ویرایش" and len(p)==6:
                         sch=await s.get(Schedule,int(p[1])); c0=await get_class_by_name(s,p[2]); sub=await get_subject_by_name(s,p[3])
                         if not sch or not c0 or not sub: raise ValueError("برنامه، کلاس یا درس پیدا نشد.")
-                        sch.class_id,sch.subject_id,sch.weekday,sch.period=c0.id,sub.id,p[4],p[5]; await s.commit(); await update.message.reply_text("✅ برنامه ویرایش شد.")
+                        sch.class_id,sch.subject_id,sch.weekday,sch.period=c0.id,sub.id,p[4],p[5]; await s.commit(); await reply_long(update.message, "✅ برنامه ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         sch=await s.get(Schedule,int(p[1]))
                         if not sch: raise ValueError("برنامه پیدا نشد.")
-                        await s.delete(sch); await s.commit(); await update.message.reply_text("✅ برنامه حذف شد.")
+                        await s.delete(sch); await s.commit(); await reply_long(update.message, "✅ برنامه حذف شد.")
                     else: raise ValueError("فرمت برنامه درست نیست.")
                 elif state == "admin_questions":
                     p=[x.strip() for x in text.split("|",2)]
                     action=p[0]
                     if action=="نمایش":
                         data=(await s.execute(select(Question,User).join(User,Question.student_user_id==User.id).order_by(Question.id.desc()).limit(50))).all()
-                        await update.message.reply_text("\n\n".join(f"#{q.id} [{q.status}] {usr.name}\\n{q.text}\\nپاسخ: {q.answer or '---'}" for q,usr in data) or "سؤالی ثبت نشده.")
+                        await reply_long(update.message, "\n\n".join(f"#{q.id} [{q.status}] {usr.name}\\n{q.text}\\nپاسخ: {q.answer or '---'}" for q,usr in data) or "سؤالی ثبت نشده.")
                     elif action=="پاسخ" and len(p)==3:
                         q=await s.get(Question,int(p[1]))
                         if not q: raise ValueError("سؤال پیدا نشد.")
@@ -1388,15 +1410,15 @@ async def process_state(update, context, u):
                         q.answer,q.status=p[2],"ANSWERED"; await s.commit()
                         student=await s.get(User,q.student_user_id)
                         if student and student.telegram_id:
-                            try: await context.bot.send_message(student.telegram_id,f"💬 پاسخ سؤال #{q.id}:\\n{p[2]}")
+                            try: await send_long(context.bot, student.telegram_id,f"💬 پاسخ سؤال #{q.id}:\\n{p[2]}")
                             except Exception: log.exception("admin question notification failed")
                         await log_action(u.id,"admin_question_answered",str(q.id))
-                        await update.message.reply_text("✅ پاسخ سؤال ثبت و برای دانش‌آموز ارسال شد.")
+                        await reply_long(update.message, "✅ پاسخ سؤال ثبت و برای دانش‌آموز ارسال شد.")
                     elif action=="حذف" and len(p)==2:
                         q=await s.get(Question,int(p[1]))
                         if not q: raise ValueError("سؤال پیدا نشد.")
                         await s.delete(q); await s.commit(); await log_action(u.id,"admin_question_deleted",p[1])
-                        await update.message.reply_text("✅ سؤال حذف شد.")
+                        await reply_long(update.message, "✅ سؤال حذف شد.")
                     else: raise ValueError("عملیات سؤال نامعتبر است.")
                 elif state in ("admin_announcement", "admin_tomorrow"):
                     p = [x.strip() for x in text.split("|", 5)]
@@ -1409,7 +1431,7 @@ async def process_state(update, context, u):
                             cls=await get_class_by_name(s,class_text) if class_text and class_text!="همه" else None
                             if class_text and class_text!="همه" and not cls: raise ValueError("کلاس مشخص‌شده پیدا نشد.")
                             await create_announcement(context.bot,title,body,cls.id if cls else None,"tomorrow",when,u.id)
-                            await update.message.reply_text("✅ اطلاعیه فردا زمان‌بندی شد.")
+                            await reply_long(update.message, "✅ اطلاعیه فردا زمان‌بندی شد.")
                         elif action=="ویرایش" and len(p)>=6:
                             a=await s.get(Announcement,int(p[1]))
                             if not a or a.kind!="tomorrow": raise ValueError("اطلاعیه فردا پیدا نشد.")
@@ -1418,80 +1440,80 @@ async def process_state(update, context, u):
                             cls=await get_class_by_name(s,p[5]) if p[5] and p[5]!="همه" else None
                             if p[5] and p[5]!="همه" and not cls: raise ValueError("کلاس پیدا نشد.")
                             a.title,a.body,a.scheduled_at,a.class_id,a.sent=p[2],p[3],when,cls.id if cls else None,False
-                            await s.commit(); await update.message.reply_text("✅ اطلاعیه فردا ویرایش شد.")
+                            await s.commit(); await reply_long(update.message, "✅ اطلاعیه فردا ویرایش شد.")
                         elif action=="حذف" and len(p)==2:
                             a=await s.get(Announcement,int(p[1]))
                             if not a or a.kind!="tomorrow": raise ValueError("اطلاعیه فردا پیدا نشد.")
-                            await s.delete(a); await s.commit(); await update.message.reply_text("✅ اطلاعیه فردا حذف شد.")
+                            await s.delete(a); await s.commit(); await reply_long(update.message, "✅ اطلاعیه فردا حذف شد.")
                         else: raise ValueError("عملیات اطلاعیه فردا نامعتبر است.")
                     else:
                         if action=="افزودن" and len(p)>=4:
                             cls=await get_class_by_name(s,p[3]) if p[3] and p[3]!="همه" else None
                             if p[3] and p[3]!="همه" and not cls: raise ValueError("کلاس پیدا نشد.")
                             await create_announcement(context.bot,p[1],p[2],cls.id if cls else None,"announcement",None,u.id)
-                            await update.message.reply_text("✅ اطلاعیه ثبت و ارسال شد.")
+                            await reply_long(update.message, "✅ اطلاعیه ثبت و ارسال شد.")
                         elif action=="ویرایش" and len(p)>=5:
                             a=await s.get(Announcement,int(p[1]))
                             if not a or a.kind!="announcement": raise ValueError("اطلاعیه پیدا نشد.")
                             cls=await get_class_by_name(s,p[4]) if p[4] and p[4]!="همه" else None
                             if p[4] and p[4]!="همه" and not cls: raise ValueError("کلاس پیدا نشد.")
                             a.title,a.body,a.class_id=p[2],p[3],cls.id if cls else None
-                            await s.commit(); await update.message.reply_text("✅ اطلاعیه ویرایش شد.")
+                            await s.commit(); await reply_long(update.message, "✅ اطلاعیه ویرایش شد.")
                         elif action=="حذف" and len(p)==2:
                             a=await s.get(Announcement,int(p[1]))
                             if not a or a.kind!="announcement": raise ValueError("اطلاعیه پیدا نشد.")
-                            await s.delete(a); await s.commit(); await update.message.reply_text("✅ اطلاعیه حذف شد.")
+                            await s.delete(a); await s.commit(); await reply_long(update.message, "✅ اطلاعیه حذف شد.")
                         else: raise ValueError("عملیات اطلاعیه نامعتبر است.")
                 else:
-                    await update.message.reply_text("این بخش در حال حاضر فقط نمایش/تنظیمات است.")
+                    await reply_long(update.message, "این بخش در حال حاضر فقط نمایش/تنظیمات است.")
                     context.user_data.clear()
                     return True
             if state in ("admin_announcement", "admin_tomorrow"):
                 await create_announcement(context.bot, title, body, cid, kind, when, u.id)
-                await update.message.reply_text("اطلاعیه ثبت شد.")
+                await reply_long(update.message, "اطلاعیه ثبت شد.")
         except Exception as e:
             log.exception("admin state")
-            await update.message.reply_text(f"❌ خطا: {str(e)}")
+            await reply_long(update.message, f"❌ خطا: {str(e)}")
         context.user_data.clear()
         return True
 
     if u.role == "ADMIN" and state == "admin_note_manage":
         parts=[x.strip() for x in text.split("|",1)]
         if len(parts)!=2:
-            await update.message.reply_text("فرمت: افزودن|نام درس|عنوان یا حذف|شناسه جزوه")
+            await reply_long(update.message, "فرمت: افزودن|نام درس|عنوان یا حذف|شناسه جزوه")
             return True
         action,value=parts
         if action=="افزودن":
             meta=[x.strip() for x in value.split("|",1)]
             if len(meta)!=2 or not all(meta):
-                await update.message.reply_text("فرمت افزودن: افزودن|نام درس|عنوان")
+                await reply_long(update.message, "فرمت افزودن: افزودن|نام درس|عنوان")
                 return True
             context.user_data["note_meta"]=meta
             context.user_data["state"]="admin_note_file"
-            await update.message.reply_text("حالا فایل جزوه را ارسال کنید.")
+            await reply_long(update.message, "حالا فایل جزوه را ارسال کنید.")
             return True
         if action=="حذف":
             async with SessionLocal() as s:
                 n=await s.get(Note,int(value))
                 if not n:
-                    await update.message.reply_text("جزوه پیدا نشد.")
+                    await reply_long(update.message, "جزوه پیدا نشد.")
                     return True
                 await s.delete(n)
                 await s.commit()
             context.user_data.clear()
-            await update.message.reply_text("✅ جزوه حذف شد.")
+            await reply_long(update.message, "✅ جزوه حذف شد.")
             return True
-        await update.message.reply_text("عملیات نامعتبر است.")
+        await reply_long(update.message, "عملیات نامعتبر است.")
         return True
 
     if u.role == "ADMIN" and state == "admin_note_title":
         meta = [x.strip() for x in text.split("|", 1)]
         if len(meta) != 2:
-            await update.message.reply_text("فرمت درست: نام درس|عنوان")
+            await reply_long(update.message, "فرمت درست: نام درس|عنوان")
             return True
         context.user_data["note_meta"] = meta
         context.user_data["state"] = "admin_note_file"
-        await update.message.reply_text("حالا فایل جزوه را ارسال کنید.")
+        await reply_long(update.message, "حالا فایل جزوه را ارسال کنید.")
         return True
 
     # Determiner CRUD wizard: every field is collected in its own Telegram message.
@@ -1531,15 +1553,15 @@ async def process_state(update, context, u):
         if not flow:
             if text in assigner_wizard_specs[state]:
                 context.user_data["assigner_flow"] = {"action": text, "i": 0, "values": [], "fields": assigner_wizard_specs[state][text]}
-                await update.message.reply_text(assigner_wizard_specs[state][text][0][1])
+                await reply_long(update.message, assigner_wizard_specs[state][text][0][1])
                 return True
-            await update.message.reply_text("عملیات را جداگانه ارسال کنید: «افزودن»، «ویرایش»، «حذف» یا برای سؤال «پاسخ».")
+            await reply_long(update.message, "عملیات را جداگانه ارسال کنید: «افزودن»، «ویرایش»، «حذف» یا برای سؤال «پاسخ».")
             return True
         fields = flow["fields"]
         flow["values"].append(text)
         flow["i"] += 1
         if flow["i"] < len(fields):
-            await update.message.reply_text(fields[flow["i"]][1])
+            await reply_long(update.message, fields[flow["i"]][1])
             return True
         action = flow["action"]
         vals = flow["values"]
@@ -1552,7 +1574,7 @@ async def process_state(update, context, u):
             if action == "افزودن":
                 context.user_data["note_meta"] = vals
                 context.user_data["state"] = "assigner_note_file"
-                await update.message.reply_text("حالا فایل PDF جزوه را ارسال کنید. جزوه‌های قبلی حذف نمی‌شوند و این جزوه اضافه می‌شود.")
+                await reply_long(update.message, "حالا فایل PDF جزوه را ارسال کنید. جزوه‌های قبلی حذف نمی‌شوند و این جزوه اضافه می‌شود.")
                 return True
             text = "حذف|" + vals[0]
 
@@ -1573,7 +1595,7 @@ async def process_state(update, context, u):
                         a=Assignment(subject_id=sub.id,title=p[2],body=p[3],due_at=due,created_by=u.id)
                         s.add(a); await s.commit()
                         await create_announcement(context.bot,"تکلیف جدید: "+p[2],p[3],sub.class_id,"announcement",None,u.id)
-                        await update.message.reply_text("✅ تکلیف ثبت شد و اطلاع‌رسانی شد.")
+                        await reply_long(update.message, "✅ تکلیف ثبت شد و اطلاع‌رسانی شد.")
                     elif p[0]=="ویرایش" and len(p)>=6:
                         a=await s.get(Assignment,int(p[1]))
                         matches=[x for x in subs if x.name==p[2]]
@@ -1584,11 +1606,11 @@ async def process_state(update, context, u):
                         due=None if p[5]=="ندارد" else parse_dt(p[5])
                         if p[5]!="ندارد" and due is None: raise ValueError("مهلت نامعتبر است.")
                         a.subject_id,a.title,a.body,a.due_at=sub.id,p[3],p[4],due
-                        await s.commit(); await update.message.reply_text("✅ تکلیف ویرایش شد.")
+                        await s.commit(); await reply_long(update.message, "✅ تکلیف ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         a=await s.get(Assignment,int(p[1]))
                         if not a or a.subject_id not in allowed_ids: raise ValueError("تکلیف پیدا نشد یا دسترسی ندارید.")
-                        await s.delete(a); await s.commit(); await update.message.reply_text("✅ تکلیف حذف شد.")
+                        await s.delete(a); await s.commit(); await reply_long(update.message, "✅ تکلیف حذف شد.")
                     else: raise ValueError("فرمت تکلیف درست نیست.")
                 elif state == "assigner_exam":
                     p=[x.strip() for x in text.split("|")]
@@ -1599,18 +1621,18 @@ async def process_state(update, context, u):
                         if not sub: raise ValueError("این درس برای شما مجاز نیست.")
                         dt=parse_dt(p[3])
                         if not dt: raise ValueError("تاریخ امتحان الزامی است.")
-                        s.add(Exam(subject_id=sub.id,title=p[2],exam_at=dt,details=p[4] if len(p)>4 else "",created_by=u.id)); await s.commit(); await create_announcement(context.bot,"امتحان جدید: "+p[2],p[4] if len(p)>4 else "",sub.class_id,"announcement",None,u.id); await update.message.reply_text("✅ امتحان ثبت شد و اطلاع‌رسانی شد.")
+                        s.add(Exam(subject_id=sub.id,title=p[2],exam_at=dt,details=p[4] if len(p)>4 else "",created_by=u.id)); await s.commit(); await create_announcement(context.bot,"امتحان جدید: "+p[2],p[4] if len(p)>4 else "",sub.class_id,"announcement",None,u.id); await reply_long(update.message, "✅ امتحان ثبت شد و اطلاع‌رسانی شد.")
                     elif p[0]=="ویرایش" and len(p)>=6:
                         e=await s.get(Exam,int(p[1])); matches=[x for x in subs if x.name==p[2]]
                         if len(matches)>1: raise ValueError("نام این درس تکراری است؛ از مدیریت بخواهید دسترسی درس را با نام یکتا تعریف کند.")
                         sub=matches[0] if matches else None
                         if not e or not sub: raise ValueError("امتحان یا درس پیدا نشد.")
                         if e.subject_id not in {x.id for x in subs}: raise ValueError("به این امتحان دسترسی ندارید.")
-                        e.subject_id,e.title,e.exam_at,e.details=sub.id,p[3],parse_dt(p[4]),p[5]; await s.commit(); await update.message.reply_text("✅ امتحان ویرایش شد.")
+                        e.subject_id,e.title,e.exam_at,e.details=sub.id,p[3],parse_dt(p[4]),p[5]; await s.commit(); await reply_long(update.message, "✅ امتحان ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         e=await s.get(Exam,int(p[1]))
                         if not e or e.subject_id not in {x.id for x in subs}: raise ValueError("امتحان پیدا نشد یا دسترسی ندارید.")
-                        await s.delete(e); await s.commit(); await update.message.reply_text("✅ امتحان حذف شد.")
+                        await s.delete(e); await s.commit(); await reply_long(update.message, "✅ امتحان حذف شد.")
                     else: raise ValueError("فرمت امتحان درست نیست.")
                 elif state == "assigner_schedule":
                     p=[x.strip() for x in text.split("|")]
@@ -1621,7 +1643,7 @@ async def process_state(update, context, u):
                         if not sub: raise ValueError("این درس برای شما مجاز نیست.")
                         acc=(await s.execute(select(Access).where(Access.assigner_user_id==u.id,Access.subject_id==sub.id))).scalars().first()
                         if not acc: raise ValueError("دسترسی کلاس پیدا نشد.")
-                        s.add(Schedule(class_id=acc.class_id,subject_id=sub.id,weekday=p[2],period=p[3])); await s.commit(); await create_announcement(context.bot,"تغییر برنامه هفتگی",f"{sub.name} - {p[2]} - {p[3]}",acc.class_id,"announcement",None,u.id); await update.message.reply_text("✅ برنامه ثبت شد و اطلاع‌رسانی شد.")
+                        s.add(Schedule(class_id=acc.class_id,subject_id=sub.id,weekday=p[2],period=p[3])); await s.commit(); await create_announcement(context.bot,"تغییر برنامه هفتگی",f"{sub.name} - {p[2]} - {p[3]}",acc.class_id,"announcement",None,u.id); await reply_long(update.message, "✅ برنامه ثبت شد و اطلاع‌رسانی شد.")
                     elif p[0]=="ویرایش" and len(p)==5:
                         sch=await s.get(Schedule,int(p[1])); matches=[x for x in subs if x.name==p[2]]
                         if len(matches)>1: raise ValueError("نام این درس تکراری است؛ از مدیریت بخواهید دسترسی درس را با نام یکتا تعریف کند.")
@@ -1630,12 +1652,12 @@ async def process_state(update, context, u):
                         if sch.subject_id not in {x.id for x in subs}: raise ValueError("به این برنامه دسترسی ندارید.")
                         acc=(await s.execute(select(Access).where(Access.assigner_user_id==u.id,Access.subject_id==sub.id))).scalars().first()
                         if not acc or sch.class_id!=acc.class_id: raise ValueError("به این برنامه دسترسی ندارید.")
-                        sch.subject_id,sch.weekday,sch.period=sub.id,p[3],p[4]; await s.commit(); await update.message.reply_text("✅ برنامه ویرایش شد.")
+                        sch.subject_id,sch.weekday,sch.period=sub.id,p[3],p[4]; await s.commit(); await reply_long(update.message, "✅ برنامه ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         sch=await s.get(Schedule,int(p[1]))
                         if not sch: raise ValueError("برنامه پیدا نشد.")
                         if not await s.scalar(select(Access.id).where(Access.assigner_user_id==u.id,Access.class_id==sch.class_id,Access.subject_id==sch.subject_id).limit(1)): raise ValueError("به این برنامه دسترسی ندارید.")
-                        await s.delete(sch); await s.commit(); await update.message.reply_text("✅ برنامه حذف شد.")
+                        await s.delete(sch); await s.commit(); await reply_long(update.message, "✅ برنامه حذف شد.")
                     else: raise ValueError("فرمت برنامه درست نیست.")
                 elif state == "assigner_announcement":
                     parts = [x.strip() for x in text.split("|", 1)]
@@ -1661,7 +1683,7 @@ async def process_state(update, context, u):
                             if x and failed is None:
                                 x.sent = True
                                 await ss.commit()
-                    await update.message.reply_text("اطلاعیه برای کلاس‌های مجاز ثبت و ارسال شد.")
+                    await reply_long(update.message, "اطلاعیه برای کلاس‌های مجاز ثبت و ارسال شد.")
                 elif state == "assigner_tomorrow":
                     parts = [x.strip() for x in text.split("|", 2)]
                     if len(parts) != 3 or not all(parts):
@@ -1676,7 +1698,7 @@ async def process_state(update, context, u):
                         raise ValueError("برای شما هیچ کلاسی تعریف نشده است.")
                     for cid in class_ids:
                         s.add(Announcement(title=title, body=body, class_id=cid, kind="tomorrow", scheduled_at=scheduled_at, created_by=u.id))
-                    await s.commit(); await update.message.reply_text("اطلاعیه فردا برای کلاس‌های مجاز زمان‌بندی شد.")
+                    await s.commit(); await reply_long(update.message, "اطلاعیه فردا برای کلاس‌های مجاز زمان‌بندی شد.")
                 elif state == "assigner_answer":
                     parts = [x.strip() for x in text.split("|", 1)]
                     if len(parts) != 2 or not parts[0] or not parts[1]:
@@ -1693,15 +1715,15 @@ async def process_state(update, context, u):
                         raise ValueError("این سؤال قبلاً پاسخ داده شده است.")
                     q.answer, q.status = answer, "ANSWERED"; await s.commit()
                     student = await s.get(User, q.student_user_id)
-                    await context.bot.send_message(student.telegram_id, f"💬 پاسخ سؤال #{qid}:\n{answer}")
-                    await update.message.reply_text("پاسخ ارسال شد.")
+                    await send_long(context.bot, student.telegram_id, f"💬 پاسخ سؤال #{qid}:\n{answer}")
+                    await reply_long(update.message, "پاسخ ارسال شد.")
                 elif state == "assigner_note_title":
                     context.user_data["note_meta"] = [x.strip() for x in text.split("|", 1)]
                     context.user_data["state"] = "assigner_note_file"
-                    await update.message.reply_text("حالا فایل جزوه را ارسال کنید.")
+                    await reply_long(update.message, "حالا فایل جزوه را ارسال کنید.")
                     return True
         except Exception as e:
-            await update.message.reply_text(f"❌ خطا: {e}")
+            await reply_long(update.message, f"❌ خطا: {e}")
         context.user_data.clear()
         return True
 
@@ -1719,10 +1741,10 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await process_state(update, context, u):
         return
     if not u:
-        await update.message.reply_text("برای ورود ابتدا /start را بزنید.")
+        await reply_long(update.message, "برای ورود ابتدا /start را بزنید.")
         return
     if not u.active:
-        await update.message.reply_text("جلسه شما بسته است. برای ورود دوباره /start را بزنید.")
+        await reply_long(update.message, "جلسه شما بسته است. برای ورود دوباره /start را بزنید.")
         return
     if update.message.text == "🚪 خروج":
         await logout(update, context); return
@@ -1733,7 +1755,7 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif u.role == "ADMIN":
         await show_admin(update, context, u)
     else:
-        await update.message.reply_text("نقش شما هنوز تأیید نشده است.")
+        await reply_long(update.message, "نقش شما هنوز تأیید نشده است.")
 
 
 async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1744,27 +1766,27 @@ async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     meta = context.user_data.get("note_meta", [])
     if len(meta) != 2:
-        await update.message.reply_text("اطلاعات جزوه ناقص است.")
+        await reply_long(update.message, "اطلاعات جزوه ناقص است.")
         context.user_data.clear(); return
     async with SessionLocal() as s:
         sub = await get_subject_by_name(s, meta[0])
         if not sub: 
-            await update.message.reply_text("درس پیدا نشد."); return
+            await reply_long(update.message, "درس پیدا نشد."); return
         if u.role == "ASSIGNER":
             subs = await allowed_subjects(s, u)
             if sub.id not in {x.id for x in subs}:
-                await update.message.reply_text("به این درس دسترسی ندارید."); return
+                await reply_long(update.message, "به این درس دسترسی ندارید."); return
         elif u.role != "ADMIN":
-            await update.message.reply_text("دسترسی ندارید."); return
+            await reply_long(update.message, "دسترسی ندارید."); return
         doc = update.message.document
         if not doc or (doc.mime_type and doc.mime_type != "application/pdf"):
-            await update.message.reply_text("❌ فقط فایل PDF برای جزوه پذیرفته می‌شود.")
+            await reply_long(update.message, "❌ فقط فایل PDF برای جزوه پذیرفته می‌شود.")
             return
         # Telegram file_id is stored in PostgreSQL; adding a new note never deletes old notes.
         s.add(Note(subject_id=sub.id, title=meta[1], file_id=doc.file_id, file_name=doc.file_name or "", created_by=u.id))
         await s.commit()
     context.user_data.clear()
-    await update.message.reply_text("📖 جزوه ثبت شد.", reply_markup=keyboard(ASSIGNER_MENU if u.role=="ASSIGNER" else ADMIN_MENU))
+    await reply_long(update.message, "📖 جزوه ثبت شد.", reply_markup=keyboard(ASSIGNER_MENU if u.role=="ASSIGNER" else ADMIN_MENU))
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
