@@ -1301,7 +1301,9 @@ async def process_state(update, context, u):
                         elif p[0]=="ویرایش" and len(p)>=6:
                             a=await s.get(Assignment,int(p[1])); sub=await get_subject_by_name(s,p[2])
                             if not a or not sub: raise ValueError("تکلیف یا درس پیدا نشد.")
-                            a.subject_id,a.title,a.body,a.due_at=sub.id,p[3],p[4],parse_dt(p[5]); await s.commit(); await update.message.reply_text("✅ تکلیف ویرایش شد.")
+                            new_due=None if p[5]=="ندارد" else parse_dt(p[5])
+                        if p[5]!="ندارد" and new_due is None: raise ValueError("مهلت نامعتبر است.")
+                        a.subject_id,a.title,a.body,a.due_at=sub.id,p[3],p[4],new_due; await s.commit(); await update.message.reply_text("✅ تکلیف ویرایش شد.")
                         elif p[0]=="حذف" and len(p)==2:
                             a=await s.get(Assignment,int(p[1]))
                             if not a: raise ValueError("تکلیف پیدا نشد.")
@@ -1318,7 +1320,9 @@ async def process_state(update, context, u):
                         elif p[0]=="ویرایش" and len(p)>=6:
                             e=await s.get(Exam,int(p[1])); sub=await get_subject_by_name(s,p[2])
                             if not e or not sub: raise ValueError("امتحان یا درس پیدا نشد.")
-                            e.subject_id,e.title,e.exam_at,e.details=sub.id,p[3],parse_dt(p[4]),p[5]; await s.commit(); await update.message.reply_text("✅ امتحان ویرایش شد.")
+                            new_dt=parse_dt(p[4])
+                        if new_dt is None: raise ValueError("تاریخ و ساعت امتحان نامعتبر است.")
+                        e.subject_id,e.title,e.exam_at,e.details=sub.id,p[3],new_dt,p[5]; await s.commit(); await update.message.reply_text("✅ امتحان ویرایش شد.")
                         elif p[0]=="حذف" and len(p)==2:
                             e=await s.get(Exam,int(p[1]))
                             if not e: raise ValueError("امتحان پیدا نشد.")
@@ -1527,11 +1531,15 @@ async def process_state(update, context, u):
                 if state == "assigner_assignment":
                     p=[x.strip() for x in text.split("|")]
                     if p[0]=="افزودن" and len(p)>=4:
-                        sub=next((x for x in subs if x.name==p[1]),None)
+                        matches=[x for x in subs if x.name==p[1]]
+                        if len(matches)>1: raise ValueError("نام این درس تکراری است؛ از مدیریت بخواهید دسترسی درس را با نام یکتا تعریف کند.")
+                        sub=matches[0] if matches else None
                         if not sub: raise ValueError("این درس برای شما مجاز نیست.")
-                        a=Assignment(subject_id=sub.id,title=p[2],body=p[3],due_at=parse_dt(p[4]) if len(p)>4 else None,created_by=u.id); s.add(a); await s.commit(); await create_announcement(context.bot,"تکلیف جدید: "+p[2],p[3],sub.class_id,"announcement",None,u.id); await update.message.reply_text("✅ تکلیف ثبت شد و اطلاع‌رسانی شد.")
+                        a=Assignment(subject_id=sub.id,title=p[2],body=p[3],due_at=None if len(p)>4 and p[4]=="ندارد" else (parse_dt(p[4]) if len(p)>4 else None),created_by=u.id); s.add(a); await s.commit(); await create_announcement(context.bot,"تکلیف جدید: "+p[2],p[3],sub.class_id,"announcement",None,u.id); await update.message.reply_text("✅ تکلیف ثبت شد و اطلاع‌رسانی شد.")
                     elif p[0]=="ویرایش" and len(p)>=6:
-                        a=await s.get(Assignment,int(p[1])); sub=next((x for x in subs if x.name==p[2]),None)
+                        a=await s.get(Assignment,int(p[1])); matches=[x for x in subs if x.name==p[2]]
+                        if len(matches)>1: raise ValueError("نام این درس تکراری است؛ از مدیریت بخواهید دسترسی درس را با نام یکتا تعریف کند.")
+                        sub=matches[0] if matches else None
                         if not a or not sub: raise ValueError("تکلیف یا درس پیدا نشد.")
                         if a.subject_id not in {x.id for x in subs}: raise ValueError("به این تکلیف دسترسی ندارید.")
                         a.subject_id,a.title,a.body,a.due_at=sub.id,p[3],p[4],parse_dt(p[5]); await s.commit(); await update.message.reply_text("✅ تکلیف ویرایش شد.")
@@ -1543,13 +1551,17 @@ async def process_state(update, context, u):
                 elif state == "assigner_exam":
                     p=[x.strip() for x in text.split("|")]
                     if p[0]=="افزودن" and len(p)>=4:
-                        sub=next((x for x in subs if x.name==p[1]),None)
+                        matches=[x for x in subs if x.name==p[1]]
+                        if len(matches)>1: raise ValueError("نام این درس تکراری است؛ از مدیریت بخواهید دسترسی درس را با نام یکتا تعریف کند.")
+                        sub=matches[0] if matches else None
                         if not sub: raise ValueError("این درس برای شما مجاز نیست.")
                         dt=parse_dt(p[3])
                         if not dt: raise ValueError("تاریخ امتحان الزامی است.")
                         s.add(Exam(subject_id=sub.id,title=p[2],exam_at=dt,details=p[4] if len(p)>4 else "",created_by=u.id)); await s.commit(); await create_announcement(context.bot,"امتحان جدید: "+p[2],p[4] if len(p)>4 else "",sub.class_id,"announcement",None,u.id); await update.message.reply_text("✅ امتحان ثبت شد و اطلاع‌رسانی شد.")
                     elif p[0]=="ویرایش" and len(p)>=6:
-                        e=await s.get(Exam,int(p[1])); sub=next((x for x in subs if x.name==p[2]),None)
+                        e=await s.get(Exam,int(p[1])); matches=[x for x in subs if x.name==p[2]]
+                        if len(matches)>1: raise ValueError("نام این درس تکراری است؛ از مدیریت بخواهید دسترسی درس را با نام یکتا تعریف کند.")
+                        sub=matches[0] if matches else None
                         if not e or not sub: raise ValueError("امتحان یا درس پیدا نشد.")
                         if e.subject_id not in {x.id for x in subs}: raise ValueError("به این امتحان دسترسی ندارید.")
                         e.subject_id,e.title,e.exam_at,e.details=sub.id,p[3],parse_dt(p[4]),p[5]; await s.commit(); await update.message.reply_text("✅ امتحان ویرایش شد.")
@@ -1561,13 +1573,17 @@ async def process_state(update, context, u):
                 elif state == "assigner_schedule":
                     p=[x.strip() for x in text.split("|")]
                     if p[0]=="افزودن" and len(p)==4:
-                        sub=next((x for x in subs if x.name==p[1]),None)
+                        matches=[x for x in subs if x.name==p[1]]
+                        if len(matches)>1: raise ValueError("نام این درس تکراری است؛ از مدیریت بخواهید دسترسی درس را با نام یکتا تعریف کند.")
+                        sub=matches[0] if matches else None
                         if not sub: raise ValueError("این درس برای شما مجاز نیست.")
                         acc=(await s.execute(select(Access).where(Access.assigner_user_id==u.id,Access.subject_id==sub.id))).scalars().first()
                         if not acc: raise ValueError("دسترسی کلاس پیدا نشد.")
                         s.add(Schedule(class_id=acc.class_id,subject_id=sub.id,weekday=p[2],period=p[3])); await s.commit(); await create_announcement(context.bot,"تغییر برنامه هفتگی",f"{sub.name} - {p[2]} - {p[3]}",acc.class_id,"announcement",None,u.id); await update.message.reply_text("✅ برنامه ثبت شد و اطلاع‌رسانی شد.")
                     elif p[0]=="ویرایش" and len(p)==5:
-                        sch=await s.get(Schedule,int(p[1])); sub=next((x for x in subs if x.name==p[2]),None)
+                        sch=await s.get(Schedule,int(p[1])); matches=[x for x in subs if x.name==p[2]]
+                        if len(matches)>1: raise ValueError("نام این درس تکراری است؛ از مدیریت بخواهید دسترسی درس را با نام یکتا تعریف کند.")
+                        sub=matches[0] if matches else None
                         if not sch or not sub: raise ValueError("برنامه یا درس پیدا نشد.")
                         if sch.subject_id not in {x.id for x in subs}: raise ValueError("به این برنامه دسترسی ندارید.")
                         acc=(await s.execute(select(Access).where(Access.assigner_user_id==u.id,Access.subject_id==sub.id))).scalars().first()
