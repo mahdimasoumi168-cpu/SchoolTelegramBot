@@ -1,6 +1,7 @@
 import asyncio
 import os
 import logging
+import sys
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -20,7 +21,7 @@ from telegram.ext import (
 )
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=True)
 # Never log httpx request URLs because Telegram bot URLs contain the bot token.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
