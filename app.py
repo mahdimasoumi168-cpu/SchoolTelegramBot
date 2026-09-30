@@ -837,15 +837,15 @@ async def show_assigner(update, context, u):
             access = (await s.execute(select(Access).where(Access.assigner_user_id == u.id))).scalars().all()
             class_ids = {a.class_id for a in access}
             if not class_ids:
-                await reply_long(update.message, "هنوز دسترسی کلاسی برای شما تعریف نشده.")
+                await reply_panel_text(update.message, "هنوز دسترسی کلاسی برای شما تعریف نشده.", u)
                 return
             q = await s.execute(select(Student, User).join(User, Student.user_id == User.id).where(Student.class_id.in_(class_ids)))
             data = q.all()
-            await reply_long(update.message, "👨‍🎓 دانش‌آموزان:\n" + ("\n".join(f"• {user.name} — {user.telegram_id}" for _, user in data) or "دانش‌آموزی نیست."))
+            await reply_panel_text(update.message, "👨‍🎓 دانش‌آموزان:\n" + ("\n".join(f"• {user.name} — {user.telegram_id}" for _, user in data) or "دانش‌آموزی نیست."), u)
     elif t == "📚 درس‌ها":
         async with SessionLocal() as s:
             subs = await allowed_subjects(s, u)
-            await reply_long(update.message, "📚 درس‌های در دسترس:\n" + ("\n".join(f"• {x.id}: {x.name}" for x in subs) or "درسی در دسترس نیست."))
+            await reply_panel_text(update.message, "📚 درس‌های در دسترس:\n" + ("\n".join(f"• {x.id}: {x.name}" for x in subs) or "درسی در دسترس نیست."), u)
     elif t == "📝 تکالیف":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
@@ -886,7 +886,7 @@ async def show_assigner(update, context, u):
             preview.extend(f"• #{n.id} — {n.title} — {sub.name} — {n.file_name or 'PDF'}" for n, sub in rows)
             if not rows:
                 preview.append("هنوز جزوه‌ای برای دسترسی شما ثبت نشده است.")
-            await reply_long(update.message, "\n".join(preview))
+            await reply_panel_text(update.message, "\n".join(preview), u)
         context.user_data["state"] = "assigner_note_title"
         await reply_long(update.message, "حالا «افزودن» یا «حذف» را ارسال کنید. برای افزودن، درس از فهرست دسترسی شما انتخاب می‌شود و عنوان را جداگانه می‌گیرم.")
     elif t == "❓ سؤالات":
@@ -900,9 +900,9 @@ async def show_assigner(update, context, u):
             q = await s.execute(q_stmt.order_by(Question.id.desc()).limit(30))
             data = q.all()
             if not data:
-                await reply_long(update.message, "سؤال بازی وجود ندارد.")
+                await reply_panel_text(update.message, "سؤال بازی وجود ندارد.", u)
             else:
-                await reply_long(update.message, "\n".join(f"#{x.id} — {u2.name}\n{x.text}" for x, u2 in data))
+                await reply_panel_text(update.message, "\n".join(f"#{x.id} — {u2.name}\n{x.text}" for x, u2 in data), u)
             context.user_data["state"] = "assigner_answer"
             await reply_long(update.message, "برای پاسخ، ابتدا شماره سؤال را در یک پیام و سپس متن پاسخ را در پیام بعدی ارسال کنید.")
     elif t == "🔔 اطلاعیه فردا":
@@ -976,7 +976,7 @@ async def show_admin(update, context, u):
             preview.extend(f"• #{n.id} — {n.title} — {sub.name} — {n.file_name or 'PDF'}" for n, sub in rows)
             if not rows:
                 preview.append("هنوز جزوه‌ای ثبت نشده است.")
-            await reply_long(update.message, "\n".join(preview))
+            await reply_panel_text(update.message, "\n".join(preview), u)
         context.user_data["state"] = "admin_note_title"
         await reply_long(update.message, "حالا «افزودن» یا «حذف» را ارسال کنید. برای افزودن، درس از فهرست موجود انتخاب می‌شود و عنوان را جداگانه می‌گیرم.")
     elif t == "📅 مدیریت برنامه هفتگی":
@@ -1026,12 +1026,12 @@ async def show_admin(update, context, u):
         context.user_data["state"] = "admin_files"
         await reply_long(update.message, "🗂️ مدیریت فایل‌ها\n\nبرای فهرست فایل‌ها «نمایش» و برای حذف یک فایل «حذف» را ارسال کنید؛ شناسه فایل را در پیام بعدی می‌گیرم.")
     elif t == "⚙️ تنظیمات بات":
-        await reply_long(update.message, f"⚙️ تنظیمات فعال\nمنطقه زمانی: {TIMEZONE}\nپایگاه‌داده: {'PostgreSQL' if 'postgres' in DATABASE_URL else 'سایر'}")
+        await reply_panel_text(update.message, f"⚙️ تنظیمات فعال\nمنطقه زمانی: {TIMEZONE}\nپایگاه‌داده: {'PostgreSQL' if 'postgres' in DATABASE_URL else 'سایر'}", u)
     elif t == "🗄️ مدیریت دیتابیس":
         async with SessionLocal() as s:
-            await reply_long(update.message, "اتصال دیتابیس برقرار است." if await s.scalar(select(1)) == 1 else "خطا در دیتابیس.")
+            await reply_panel_text(update.message, "اتصال دیتابیس برقرار است." if await s.scalar(select(1)) == 1 else "خطا در دیتابیس.", u)
     elif t == "🔒 تنظیمات امنیتی":
-        await reply_long(update.message, "امنیت: توکن فقط از متغیر محیطی خوانده می‌شود؛ نقش‌ها در DB کنترل می‌شوند؛ اطلاعات حساس در GitHub ذخیره نشده است.")
+        await reply_panel_text(update.message, "امنیت: توکن فقط از متغیر محیطی خوانده می‌شود؛ نقش‌ها در DB کنترل می‌شوند؛ اطلاعات حساس در GitHub ذخیره نشده است.", u)
     elif t == "🔔 ارسال اعلان":
         context.user_data["state"] = "admin_announcement"
         await reply_long(update.message, "📨 ارسال اعلان\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و کلاس را جداگانه ارسال کنید.")
