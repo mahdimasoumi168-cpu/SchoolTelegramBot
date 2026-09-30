@@ -244,6 +244,28 @@ ADMIN_MENU = [
 ROLE_NAMES = {"STUDENT": "دانش‌آموز", "ASSIGNER": "تعیین‌کننده", "ADMIN": "مدیریت", "PENDING": "در انتظار تأیید"}
 
 
+async def bind_telegram_account(session, account, telegram_id: int):
+    """Safely bind Telegram and release a stale/non-admin binding from another account."""
+    locked = await session.scalar(
+        select(User).where(User.id == account.id).with_for_update()
+    )
+    if locked is None:
+        raise ValueError("حساب کاربری پیدا نشد.")
+    if locked.telegram_id is not None and locked.telegram_id != telegram_id:
+        raise ValueError("این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
+
+    owner = await session.scalar(
+        select(User).where(User.telegram_id == telegram_id).with_for_update()
+    )
+    if owner is not None and owner.id != locked.id:
+        if owner.role == "ADMIN":
+            raise ValueError("این حساب تلگرام به حساب مدیریت اصلی متصل است و قابل جابه‌جایی نیست.")
+        owner.telegram_id = None
+
+    locked.telegram_id = telegram_id
+    return locked
+
+
 def norm_name(value: str) -> str:
     # Normalize common Persian/Arabic variants so login/search works regardless
     # of keyboard layout (ي/ی, ك/ک, ZWNJ and repeated whitespace).
@@ -838,18 +860,7 @@ async def process_state(update, context, u):
             if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
                 await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
                 return True
-            # Prevent a PostgreSQL unique-constraint error when this Telegram
-            # account is already linked to a different provisioned user.
-            owner_id = await s.scalar(
-                select(User.id).where(
-                    User.telegram_id == update.effective_user.id,
-                    User.id != account.id,
-                ).limit(1)
-            )
-            if owner_id is not None:
-                await reply_long(update.message, "❌ این حساب تلگرام قبلاً به یک حساب دیگر متصل شده است. ابتدا از حساب قبلی «🚪 خروج» کنید.")
-                return True
-            account.telegram_id = update.effective_user.id
+            account = await bind_telegram_account(s, account, update.effective_user.id)
             account.active = True
             account.name = st.login_name
             await s.commit()
@@ -885,18 +896,7 @@ async def process_state(update, context, u):
             if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
                 await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
                 return True
-            # Prevent a PostgreSQL unique-constraint error when this Telegram
-            # account is already linked to a different provisioned user.
-            owner_id = await s.scalar(
-                select(User.id).where(
-                    User.telegram_id == update.effective_user.id,
-                    User.id != account.id,
-                ).limit(1)
-            )
-            if owner_id is not None:
-                await reply_long(update.message, "❌ این حساب تلگرام قبلاً به یک حساب دیگر متصل شده است. ابتدا از حساب قبلی «🚪 خروج» کنید.")
-                return True
-            account.telegram_id = update.effective_user.id
+            account = await bind_telegram_account(s, account, update.effective_user.id)
             account.active = True
             await s.commit()
         context.user_data.clear()
@@ -939,18 +939,7 @@ async def process_state(update, context, u):
             if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
                 await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
                 return True
-            # Prevent a PostgreSQL unique-constraint error when this Telegram
-            # account is already linked to a different provisioned user.
-            owner_id = await s.scalar(
-                select(User.id).where(
-                    User.telegram_id == update.effective_user.id,
-                    User.id != account.id,
-                ).limit(1)
-            )
-            if owner_id is not None:
-                await reply_long(update.message, "❌ این حساب تلگرام قبلاً به یک حساب دیگر متصل شده است. ابتدا از حساب قبلی «🚪 خروج» کنید.")
-                return True
-            account.telegram_id = update.effective_user.id
+            account = await bind_telegram_account(s, account, update.effective_user.id)
             account.active = True
             account.name = st.login_name
             await s.commit()
@@ -983,16 +972,7 @@ async def process_state(update, context, u):
             if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
                 await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
                 return True
-            owner_id = await s.scalar(
-                select(User.id).where(
-                    User.telegram_id == update.effective_user.id,
-                    User.id != account.id,
-                ).limit(1)
-            )
-            if owner_id is not None:
-                await reply_long(update.message, "❌ این حساب تلگرام قبلاً به یک حساب دیگر متصل شده است. ابتدا از حساب قبلی «🚪 خروج» کنید.")
-                return True
-            account.telegram_id = update.effective_user.id
+            account = await bind_telegram_account(s, account, update.effective_user.id)
             await s.commit()
         context.user_data.clear()
         await log_action(account.id, "assigner_login", username)
