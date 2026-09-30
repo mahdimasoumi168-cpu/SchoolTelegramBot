@@ -595,7 +595,7 @@ async def show_admin(update, context, u):
         await update.message.reply_text("مدیریت امتحانات:\\nافزودن|نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات\\nویرایش|شناسه|نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات\\nحذف|شناسه")
     elif t == "📖 مدیریت جزوات":
         context.user_data["state"] = "admin_note_title"
-        await update.message.reply_text("نام درس و عنوان جزوه را با | بفرستید: نام درس|عنوان")
+        await update.message.reply_text("📖 مدیریت جزوات\\n\\nابتدا فقط نوع عملیات را ارسال کنید: افزودن / حذف\\nدر حالت افزودن، نام درس و عنوان جداگانه گرفته می‌شود و سپس فایل PDF را ارسال می‌کنید.")
     elif t == "📅 مدیریت برنامه هفتگی":
         context.user_data["state"] = "admin_schedule"
         await update.message.reply_text("مدیریت برنامه هفتگی:\\nافزودن|نام کلاس|نام درس|روز|زنگ\\nویرایش|شناسه|نام کلاس|نام درس|روز|زنگ\\nحذف|شناسه")
@@ -604,7 +604,7 @@ async def show_admin(update, context, u):
         await update.message.reply_text("فرمت: عنوان|متن|نام کلاس اختیاری\nبرای همه کلاس‌ها، بخش کلاس را خالی بگذارید.")
     elif t == "🔔 اطلاعیه فردا":
         context.user_data["state"] = "admin_tomorrow"
-        await update.message.reply_text("فرمت: عنوان|متن|YYYY-MM-DD HH:MM|نام کلاس اختیاری")
+        await update.message.reply_text("🔔 اطلاعیه فردا\\n\\nابتدا «افزودن» را ارسال کنید؛ سپس عنوان، متن، زمان و کلاس را جداگانه می‌گیرم.")
     elif t == "❓ مدیریت سؤالات":
         async with SessionLocal() as s:
             data = (await s.execute(select(Question, User).join(User, Question.student_user_id == User.id).order_by(Question.id.desc()).limit(50))).all()
@@ -976,6 +976,115 @@ async def process_state(update, context, u):
             log.exception("student question flow failed")
             await update.message.reply_text("❌ ثبت سؤال انجام نشد. وضعیت شما حفظ شد؛ دوباره تلاش کنید.")
         return True
+
+
+    # Admin CRUD wizard: collect every field in a separate Telegram message.
+    # The old pipe-separated formats remain supported below for compatibility.
+    admin_wizard_specs = {
+        "admin_student": {
+            "افزودن": [("school","کد مدرسه را ارسال کنید:"),("name","نام و نام خانوادگی را ارسال کنید:"),("class","نام کلاس را ارسال کنید:")],
+            "ویرایش": [("id","شناسه دانش‌آموز را ارسال کنید:"),("school","کد مدرسه جدید را ارسال کنید:"),("name","نام جدید را ارسال کنید:"),("class","نام کلاس جدید را ارسال کنید:")],
+            "حذف": [("id","شناسه دانش‌آموز را ارسال کنید:")]
+        },
+        "admin_assigner": {
+            "افزودن": [("username","نام کاربری را ارسال کنید:"),("password","رمز عبور را ارسال کنید:"),("name","نام و نام خانوادگی را ارسال کنید:")],
+            "ویرایش": [("id","شناسه تعیین‌کننده را ارسال کنید:"),("username","نام کاربری جدید را ارسال کنید:"),("password","رمز عبور جدید را ارسال کنید:"),("name","نام جدید را ارسال کنید:")],
+            "حذف": [("id","شناسه تعیین‌کننده را ارسال کنید:")]
+        },
+        "admin_class": {
+            "افزودن": [("name","نام کلاس را ارسال کنید:")],
+            "ویرایش": [("old","نام فعلی کلاس را ارسال کنید:"),("new","نام جدید کلاس را ارسال کنید:")],
+            "حذف": [("name","نام کلاس را ارسال کنید:")]
+        },
+        "admin_subject": {
+            "افزودن": [("name","نام درس را ارسال کنید:"),("class","نام کلاس را ارسال کنید:"),("teacher","نام تعیین‌کننده/دبیر را ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "ویرایش": [("id","شناسه درس را ارسال کنید:"),("name","نام جدید درس را ارسال کنید:"),("class","نام کلاس جدید را ارسال کنید:")],
+            "حذف": [("id","شناسه درس را ارسال کنید:")]
+        },
+        "admin_access": {
+            "افزودن": [("username","نام کاربری تعیین‌کننده را ارسال کنید:"),("class","نام کلاس را ارسال کنید:"),("subject","نام درس را ارسال کنید:")],
+            "حذف": [("id","شناسه دسترسی را ارسال کنید:")]
+        },
+        "admin_assignment": {
+            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان تکلیف را ارسال کنید:"),("body","متن تکلیف را ارسال کنید:"),("due","مهلت را با فرمت YYYY-MM-DD HH:MM ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "ویرایش": [("id","شناسه تکلیف را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("body","متن جدید را ارسال کنید:"),("due","مهلت جدید را با فرمت YYYY-MM-DD HH:MM یا «ندارد» ارسال کنید:")],
+            "حذف": [("id","شناسه تکلیف را ارسال کنید:")]
+        },
+        "admin_exam": {
+            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان امتحان را ارسال کنید:"),("at","تاریخ و ساعت را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("details","توضیحات را ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "ویرایش": [("id","شناسه امتحان را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("at","تاریخ و ساعت جدید را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("details","توضیحات جدید را ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "حذف": [("id","شناسه امتحان را ارسال کنید:")]
+        },
+        "admin_schedule": {
+            "افزودن": [("class","نام کلاس را ارسال کنید:"),("subject","نام درس را ارسال کنید:"),("weekday","روز هفته را ارسال کنید:"),("period","ساعت/زنگ را ارسال کنید:")],
+            "ویرایش": [("id","شناسه برنامه را ارسال کنید:"),("class","نام کلاس جدید را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("weekday","روز جدید را ارسال کنید:"),("period","ساعت/زنگ جدید را ارسال کنید:")],
+            "حذف": [("id","شناسه برنامه را ارسال کنید:")]
+        },
+        "admin_note_title": {
+            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان جزوه را ارسال کنید:")],
+            "حذف": [("id","شناسه جزوه را ارسال کنید:")]
+        },
+        "admin_announcement": {
+            "افزودن": [("title","عنوان اطلاعیه را ارسال کنید:"),("body","متن اطلاعیه را ارسال کنید:"),("class","نام کلاس را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")]
+        },
+        "admin_tomorrow": {
+            "افزودن": [("title","عنوان اطلاعیه فردا را ارسال کنید:"),("body","متن اطلاعیه را ارسال کنید:"),("at","زمان ارسال را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("class","نام کلاس را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")]
+        }
+    }
+    if u.role == "ADMIN" and state in admin_wizard_specs:
+        flow = context.user_data.get("admin_flow")
+        if not flow:
+            if text in admin_wizard_specs[state]:
+                context.user_data["admin_flow"] = {"action": text, "i": 0, "values": []}
+                fields = admin_wizard_specs[state][text]
+                context.user_data["admin_flow"]["fields"] = fields
+                if fields:
+                    await update.message.reply_text(fields[0][1])
+                return True
+            await update.message.reply_text("عملیات را جداگانه ارسال کنید: «افزودن» یا «ویرایش» یا «حذف».")
+            return True
+        fields = flow["fields"]
+        i = flow["i"]
+        flow["values"].append(text)
+        i += 1
+        if i < len(fields):
+            flow["i"] = i
+            await update.message.reply_text(fields[i][1])
+            return True
+        action = flow["action"]
+        vals = flow["values"]
+        context.user_data.pop("admin_flow", None)
+        if state == "admin_student":
+            if action == "افزودن": text = "افزودن|" + "|".join(vals)
+            elif action == "ویرایش": text = "ویرایش|" + "|".join(vals)
+            else: text = "حذف|" + vals[0]
+        elif state == "admin_assigner":
+            text = ("افزودن|" if action=="افزودن" else "ویرایش|" if action=="ویرایش" else "حذف|") + "|".join(vals)
+        elif state == "admin_class":
+            text = ("افزودن|" + vals[0]) if action=="افزودن" else ("ویرایش|" + "|".join(vals)) if action=="ویرایش" else "حذف|" + vals[0]
+        elif state == "admin_subject":
+            text = ("افزودن|" + "|".join(vals)) if action=="افزودن" else ("ویرایش|" + "|".join(vals)) if action=="ویرایش" else "حذف|" + vals[0]
+        elif state == "admin_access":
+            text = ("افزودن|" + "|".join(vals)) if action=="افزودن" else "حذف|" + vals[0]
+        elif state == "admin_assignment":
+            text = ("افزودن|" + "|".join(vals)) if action=="افزودن" else ("ویرایش|" + "|".join(vals)) if action=="ویرایش" else "حذف|" + vals[0]
+        elif state == "admin_exam":
+            text = ("افزودن|" + "|".join(vals)) if action=="افزودن" else ("ویرایش|" + "|".join(vals)) if action=="ویرایش" else "حذف|" + vals[0]
+        elif state == "admin_schedule":
+            text = ("افزودن|" + "|".join(vals)) if action=="افزودن" else ("ویرایش|" + "|".join(vals)) if action=="ویرایش" else "حذف|" + vals[0]
+        elif state == "admin_note_title":
+            if action == "افزودن":
+                context.user_data["note_meta"] = vals
+                context.user_data["state"] = "admin_note_file"
+                await update.message.reply_text("حالا فایل PDF جزوه را ارسال کنید. جزوه‌های قبلی حذف نمی‌شوند و این جزوه به فهرست اضافه می‌شود.")
+                return True
+            text = "حذف|" + vals[0]
+            state = "admin_note_manage"
+            context.user_data["state"] = state
+        elif state == "admin_announcement":
+            text = "|".join(vals)
+        elif state == "admin_tomorrow":
+            text = "|".join(vals)
 
     if u.role == "ADMIN":
         try:
