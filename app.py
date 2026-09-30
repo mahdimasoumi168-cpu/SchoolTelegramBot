@@ -21,6 +21,9 @@ from telegram.ext import (
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
+# Never log httpx request URLs because Telegram bot URLs contain the bot token.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("school-bot")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -389,8 +392,8 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await logout(callback_update(query, text), context)
         return
     if u.role == "STUDENT" and text == "❓ سؤال":
-        context.user_data["state"] = "student_question"
-        await query.message.reply_text("سؤال خود را بنویسید. برای سؤال درسی «نام درس|متن سؤال» را بفرستید؛ برای لغو «انصراف».")
+        context.user_data["state"] = "student_question_subject"
+        await query.message.reply_text("❓ سؤال\n\nنام درس را ارسال کنید؛ اگر سؤال عمومی است «عمومی» بنویسید. سپس متن سؤال را در پیام بعدی ارسال کنید. برای لغو «انصراف».")
         return
     proxy = callback_update(query, text)
     if u.role == "STUDENT":
@@ -546,7 +549,7 @@ async def show_assigner(update, context, u):
         await update.message.reply_text("مدیریت امتحانات:\nافزودن|نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات\nویرایش|شناسه|نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات\nحذف|شناسه")
     elif t == "📖 جزوات":
         context.user_data["state"] = "assigner_note_title"
-        await update.message.reply_text("مدیریت جزوات:\\nافزودن|نام درس|عنوان سپس فایل را ارسال کنید\\nحذف|شناسه جزوه")
+        await update.message.reply_text("📖 مدیریت جزوات\n\nابتدا «افزودن» یا «حذف» را ارسال کنید. در حالت افزودن، نام درس و عنوان جداگانه گرفته می‌شود و سپس فایل PDF را ارسال می‌کنید.")
     elif t == "❓ سؤالات":
         async with SessionLocal() as s:
             allowed_ids = (await s.execute(select(Access.subject_id).where(Access.assigner_user_id == u.id, Access.subject_id.is_not(None)))).scalars().all()
@@ -918,12 +921,20 @@ async def process_state(update, context, u):
         return True
 
 
-    if state == "student_question":
+    if state == "student_question_subject":
+        subject_name = text.strip()
+        if not subject_name:
+            await update.message.reply_text("نام درس نمی‌تواند خالی باشد. نام درس یا «عمومی» را ارسال کنید:")
+            return True
+        context.user_data["question_subject"] = subject_name
+        context.user_data["state"] = "student_question_text"
+        await update.message.reply_text("حالا متن سؤال را در پیام بعدی ارسال کنید:")
+        return True
+
+    if state == "student_question_text":
         question_id = None
-        if "|" in text:
-            subject_name, question_text = [x.strip() for x in text.split("|", 1)]
-        else:
-            subject_name, question_text = "", text
+        subject_name = context.user_data.get("question_subject", "").strip()
+        question_text = text.strip()
         if not question_text:
             await update.message.reply_text("متن سؤال خالی است. دوباره ارسال کنید یا «انصراف» را بزنید.")
             return True
@@ -1332,6 +1343,68 @@ async def process_state(update, context, u):
         context.user_data["state"] = "admin_note_file"
         await update.message.reply_text("حالا فایل جزوه را ارسال کنید.")
         return True
+
+    # Determiner CRUD wizard: every field is collected in its own Telegram message.
+    # Legacy pipe-separated commands remain supported for compatibility.
+    assigner_wizard_specs = {
+        "assigner_assignment": {
+            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان تکلیف را ارسال کنید:"),("body","متن تکلیف را ارسال کنید:"),("due","مهلت را با فرمت YYYY-MM-DD HH:MM ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "ویرایش": [("id","شناسه تکلیف را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("body","متن جدید را ارسال کنید:"),("due","مهلت جدید را با فرمت YYYY-MM-DD HH:MM یا «ندارد» ارسال کنید:")],
+            "حذف": [("id","شناسه تکلیف را ارسال کنید:")]
+        },
+        "assigner_exam": {
+            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان امتحان را ارسال کنید:"),("at","تاریخ و ساعت را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("details","توضیحات را ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "ویرایش": [("id","شناسه امتحان را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("at","تاریخ و ساعت جدید را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("details","توضیحات جدید را ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "حذف": [("id","شناسه امتحان را ارسال کنید:")]
+        },
+        "assigner_schedule": {
+            "افزودن": [("subject","نام درس را ارسال کنید:"),("weekday","روز هفته را ارسال کنید:"),("period","ساعت/زنگ را ارسال کنید:")],
+            "ویرایش": [("id","شناسه برنامه را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("weekday","روز جدید را ارسال کنید:"),("period","ساعت/زنگ جدید را ارسال کنید:")],
+            "حذف": [("id","شناسه برنامه را ارسال کنید:")]
+        },
+        "assigner_announcement": {
+            "افزودن": [("title","عنوان اطلاعیه را ارسال کنید:"),("body","متن اطلاعیه را ارسال کنید:")]
+        },
+        "assigner_tomorrow": {
+            "افزودن": [("title","عنوان اطلاعیه فردا را ارسال کنید:"),("body","متن اطلاعیه را ارسال کنید:"),("at","زمان ارسال را با فرمت YYYY-MM-DD HH:MM ارسال کنید:")]
+        },
+        "assigner_answer": {
+            "پاسخ": [("id","شماره سؤال را ارسال کنید:"),("answer","متن پاسخ را ارسال کنید:")]
+        },
+        "assigner_note_title": {
+            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان جزوه را ارسال کنید:")],
+            "حذف": [("id","شناسه جزوه را ارسال کنید:")]
+        }
+    }
+    if u.role == "ASSIGNER" and state in assigner_wizard_specs:
+        flow = context.user_data.get("assigner_flow")
+        if not flow:
+            if text in assigner_wizard_specs[state]:
+                context.user_data["assigner_flow"] = {"action": text, "i": 0, "values": [], "fields": assigner_wizard_specs[state][text]}
+                await update.message.reply_text(assigner_wizard_specs[state][text][0][1])
+                return True
+            await update.message.reply_text("عملیات را جداگانه ارسال کنید: «افزودن»، «ویرایش»، «حذف» یا برای سؤال «پاسخ».")
+            return True
+        fields = flow["fields"]
+        flow["values"].append(text)
+        flow["i"] += 1
+        if flow["i"] < len(fields):
+            await update.message.reply_text(fields[flow["i"]][1])
+            return True
+        action = flow["action"]
+        vals = flow["values"]
+        context.user_data.pop("assigner_flow", None)
+        if state in ("assigner_assignment","assigner_exam","assigner_schedule"):
+            text = action + "|" + "|".join(vals)
+        elif state in ("assigner_announcement","assigner_tomorrow","assigner_answer"):
+            text = "|".join(vals)
+        elif state == "assigner_note_title":
+            if action == "افزودن":
+                context.user_data["note_meta"] = vals
+                context.user_data["state"] = "assigner_note_file"
+                await update.message.reply_text("حالا فایل PDF جزوه را ارسال کنید. جزوه‌های قبلی حذف نمی‌شوند و این جزوه اضافه می‌شود.")
+                return True
+            text = "حذف|" + vals[0]
 
     if u.role == "ASSIGNER":
         try:
