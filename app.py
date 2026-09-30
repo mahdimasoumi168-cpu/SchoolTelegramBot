@@ -936,16 +936,19 @@ async def process_state(update, context, u):
         try:
             async with SessionLocal() as s:
                 subject_id = None
-                if subject_name:
+                if subject_name and norm_name(subject_name) != "عمومی":
                     st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
                     if not st or not st.class_id:
                         raise ValueError("کلاس شما مشخص نیست.")
-                    subject = (await s.execute(
-                        select(Subject).where(Subject.name == subject_name, Subject.class_id == st.class_id)
-                    )).scalar_one_or_none()
-                    if not subject:
+                    subjects = (await s.execute(
+                        select(Subject).where(Subject.class_id == st.class_id)
+                    )).scalars().all()
+                    matches = [x for x in subjects if norm_name(x.name) == norm_name(subject_name)]
+                    if len(matches) > 1:
+                        raise ValueError("نام این درس تکراری است؛ لطفاً نام درس را دقیق‌تر وارد کنید.")
+                    if not matches:
                         raise ValueError("این درس در کلاس شما پیدا نشد.")
-                    subject_id = subject.id
+                    subject_id = matches[0].id
                 q = Question(student_user_id=u.id, subject_id=subject_id, text=question_text)
                 s.add(q)
                 await s.commit()
