@@ -1,0 +1,4 @@
+[deploy]
+startCommand = "python -c \"import time; print('Duplicate SchoolTelegramBot service disabled', flush=True); time.sleep(315360000)\""
+restartPolicyType = "NEVER"
+sleepApplication = true
