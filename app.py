@@ -1554,7 +1554,7 @@ async def process_state(update, context, u):
                         if a.subject_id not in allowed_ids: raise ValueError("به این تکلیف دسترسی ندارید.")
                         due=None if p[5]=="ندارد" else parse_dt(p[5])
                         if p[5]!="ندارد" and due is None: raise ValueError("مهلت نامعتبر است.")
-                             a.subject_id,a.title,a.body,a.due_at=sub.id,p[3],p[4],due
+                        a.subject_id,a.title,a.body,a.due_at=sub.id,p[3],p[4],due
                         await s.commit(); await update.message.reply_text("✅ تکلیف ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         a=await s.get(Assignment,int(p[1]))
@@ -1577,7 +1577,7 @@ async def process_state(update, context, u):
                         sub=matches[0] if matches else None
                         if not e or not sub: raise ValueError("امتحان یا درس پیدا نشد.")
                         if e.subject_id not in {x.id for x in subs}: raise ValueError("به این امتحان دسترسی ندارید.")
-                             e.subject_id,e.title,e.exam_at,e.details=sub.id,p[3],parse_dt(p[4]),p[5]; await s.commit(); await update.message.reply_text("✅ امتحان ویرایش شد.")
+                        e.subject_id,e.title,e.exam_at,e.details=sub.id,p[3],parse_dt(p[4]),p[5]; await s.commit(); await update.message.reply_text("✅ امتحان ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         e=await s.get(Exam,int(p[1]))
                         if not e or e.subject_id not in {x.id for x in subs}: raise ValueError("امتحان پیدا نشد یا دسترسی ندارید.")
