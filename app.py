@@ -497,7 +497,7 @@ async def show_student(update, u):
             # Callback flow is handled in menu_callback before reaching here.
             return
         context.user_data["state"] = "student_question"
-        await update.message.reply_text("سؤال خود را بنویسید. برای سؤال درسی، «نام درس|متن سؤال» را بفرستید؛ برای لغو «انصراف».")
+        await update.message.reply_text("❓ سؤال\n\nنام درس یا «عمومی» را در یک پیام بفرستید؛ سپس متن سؤال را در پیام بعدی ارسال کنید. برای لغو «انصراف».")
     elif update.message.text == "👤 حساب کاربری":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
@@ -537,16 +537,16 @@ async def show_assigner(update, context, u):
             await update.message.reply_text("📚 درس‌های در دسترس:\n" + ("\n".join(f"• {x.id}: {x.name}" for x in subs) or "درسی در دسترس نیست."))
     elif t == "📝 تکالیف":
         context.user_data["state"] = "assigner_assignment"
-        await update.message.reply_text("مدیریت تکالیف:\nافزودن|نام درس|عنوان|متن|YYYY-MM-DD HH:MM\nویرایش|شناسه|نام درس|عنوان|متن|YYYY-MM-DD HH:MM\nحذف|شناسه")
+        await update.message.reply_text("📝 مدیریت تکالیف\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید. بعد از آن هر فیلد را جداگانه از شما می‌گیرم.")
     elif t == "📢 ارسال اطلاعیه":
         context.user_data["state"] = "assigner_announcement"
-        await update.message.reply_text("فرمت اطلاعیه:\nعنوان|متن\nبرای همه کلاس‌های مجاز ارسال می‌شود.")
+        await update.message.reply_text("📢 ارسال اطلاعیه\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان و متن اطلاعیه را جداگانه ارسال کنید. اطلاعیه برای کلاس‌های مجاز شما ارسال می‌شود.")
     elif t == "📅 برنامه هفتگی":
         context.user_data["state"] = "assigner_schedule"
-        await update.message.reply_text("مدیریت برنامه:\nافزودن|نام درس|روز|ساعت/زنگ\nویرایش|شناسه|نام درس|روز|ساعت/زنگ\nحذف|شناسه")
+        await update.message.reply_text("📅 مدیریت برنامه هفتگی\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید. افزودن، برنامه‌های قبلی را حذف نمی‌کند.")
     elif t == "📝 امتحانات":
         context.user_data["state"] = "assigner_exam"
-        await update.message.reply_text("مدیریت امتحانات:\nافزودن|نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات\nویرایش|شناسه|نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات\nحذف|شناسه")
+        await update.message.reply_text("📝 مدیریت امتحانات\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید.")
     elif t == "📖 جزوات":
         context.user_data["state"] = "assigner_note_title"
         await update.message.reply_text("📖 مدیریت جزوات\n\nابتدا «افزودن» یا «حذف» را ارسال کنید. در حالت افزودن، نام درس و عنوان جداگانه گرفته می‌شود و سپس فایل PDF را ارسال می‌کنید.")
@@ -565,10 +565,10 @@ async def show_assigner(update, context, u):
             else:
                 await update.message.reply_text("\n".join(f"#{x.id} — {u2.name}\n{x.text}" for x, u2 in data))
             context.user_data["state"] = "assigner_answer"
-            await update.message.reply_text("برای پاسخ: شماره سؤال|متن پاسخ")
+            await update.message.reply_text("برای پاسخ، ابتدا شماره سؤال را در یک پیام و سپس متن پاسخ را در پیام بعدی ارسال کنید.")
     elif t == "🔔 اطلاعیه فردا":
         context.user_data["state"] = "assigner_tomorrow"
-        await update.message.reply_text("فرمت: عنوان|متن|YYYY-MM-DD HH:MM")
+        await update.message.reply_text("🔔 اطلاعیه فردا\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و زمان را جداگانه ارسال کنید.")
     else:
         await update.message.reply_text("پنل تعیین‌کننده آماده است.", reply_markup=keyboard(ASSIGNER_MENU))
 
@@ -577,34 +577,34 @@ async def show_admin(update, context, u):
     t = update.message.text
     if t == "👨‍🎓 مدیریت دانش‌آموزان":
         context.user_data["state"] = "admin_student"
-        await update.message.reply_text("فرمت ثبت/ویرایش دانش‌آموز:\nافزودن|کد مدرسه|نام|کلاس\nویرایش|شناسه|کد مدرسه|نام|کلاس\nحذف|شناسه")
+        await update.message.reply_text("👨‍🎓 مدیریت دانش‌آموزان\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "👤 مدیریت تعیین‌کنندگان":
         context.user_data["state"] = "admin_assigner"
-        await update.message.reply_text("فرمت ثبت/ویرایش تعیین‌کننده:\nافزودن|نام کاربری|رمز عبور|نام\nویرایش|شناسه|نام کاربری|رمز عبور|نام\nحذف|شناسه")
+        await update.message.reply_text("👤 مدیریت تعیین‌کنندگان\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "🏫 مدیریت کلاس‌ها":
         context.user_data["state"] = "admin_class"
-        await update.message.reply_text("فرمت: نام کلاس\nبرای حذف: حذف|نام کلاس")
+        await update.message.reply_text("🏫 مدیریت کلاس‌ها\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس اطلاعات لازم را جداگانه ارسال می‌کنم.")
     elif t == "📚 مدیریت درس‌ها":
         context.user_data["state"] = "admin_subject"
-        await update.message.reply_text("فرمت افزودن درس:\nنام درس|نام کلاس|نام تعیین‌کننده اختیاری")
+        await update.message.reply_text("📚 مدیریت درس‌ها\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "🔐 مدیریت دسترسی‌ها":
         context.user_data["state"] = "admin_access"
-        await update.message.reply_text("فرمت: افزودن|نام کاربری تعیین‌کننده|نام کلاس|نام درس\nحذف|شناسه دسترسی")
+        await update.message.reply_text("🔐 مدیریت دسترسی‌ها\n\nابتدا «افزودن» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "📝 مدیریت تکالیف":
         context.user_data["state"] = "admin_assignment"
-        await update.message.reply_text("مدیریت تکالیف:\\nافزودن|نام درس|عنوان|متن|YYYY-MM-DD HH:MM\\nویرایش|شناسه|نام درس|عنوان|متن|YYYY-MM-DD HH:MM\\nحذف|شناسه")
+        await update.message.reply_text("📝 مدیریت تکالیف\n\nابتدا عملیات را بفرستید؛ سپس عنوان، متن، درس و زمان هرکدام در پیام جداگانه دریافت می‌شود.")
     elif t == "📝 مدیریت امتحانات":
         context.user_data["state"] = "admin_exam"
-        await update.message.reply_text("مدیریت امتحانات:\\nافزودن|نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات\\nویرایش|شناسه|نام درس|عنوان|YYYY-MM-DD HH:MM|توضیحات\\nحذف|شناسه")
+        await update.message.reply_text("📝 مدیریت امتحانات\n\nابتدا عملیات را بفرستید؛ سپس هر فیلد را در پیام جداگانه دریافت می‌کنم.")
     elif t == "📖 مدیریت جزوات":
         context.user_data["state"] = "admin_note_title"
         await update.message.reply_text("📖 مدیریت جزوات\\n\\nابتدا فقط نوع عملیات را ارسال کنید: افزودن / حذف\\nدر حالت افزودن، نام درس و عنوان جداگانه گرفته می‌شود و سپس فایل PDF را ارسال می‌کنید.")
     elif t == "📅 مدیریت برنامه هفتگی":
         context.user_data["state"] = "admin_schedule"
-        await update.message.reply_text("مدیریت برنامه هفتگی:\\nافزودن|نام کلاس|نام درس|روز|زنگ\\nویرایش|شناسه|نام کلاس|نام درس|روز|زنگ\\nحذف|شناسه")
+        await update.message.reply_text("📅 مدیریت برنامه هفتگی\n\nابتدا عملیات را بفرستید؛ سپس کلاس، درس، روز و زنگ را جداگانه دریافت می‌کنم. افزودن، رکوردهای قبلی را حذف نمی‌کند.")
     elif t in ("📢 مدیریت اطلاعیه‌ها", "📨 ارسال پیام همگانی"):
         context.user_data["state"] = "admin_announcement"
-        await update.message.reply_text("فرمت: عنوان|متن|نام کلاس اختیاری\nبرای همه کلاس‌ها، بخش کلاس را خالی بگذارید.")
+        await update.message.reply_text("📢 مدیریت اطلاعیه‌ها\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و کلاس را جداگانه ارسال کنید. برای همه کلاس‌ها «همه» بنویسید.")
     elif t == "🔔 اطلاعیه فردا":
         context.user_data["state"] = "admin_tomorrow"
         await update.message.reply_text("🔔 اطلاعیه فردا\\n\\nابتدا «افزودن» را ارسال کنید؛ سپس عنوان، متن، زمان و کلاس را جداگانه می‌گیرم.")
@@ -613,20 +613,16 @@ async def show_admin(update, context, u):
             data = (await s.execute(select(Question, User).join(User, Question.student_user_id == User.id).order_by(Question.id.desc()).limit(50))).all()
             await update.message.reply_text("\n\n".join(f"#{q.id} [{q.status}] {usr.name}\n{q.text}\nپاسخ: {q.answer or '---'}" for q, usr in data) or "سؤالی ثبت نشده.")
     elif t == "👥 مدیریت کاربران":
-        await update.message.reply_text(
-            "👥 مدیریت کاربران\n\n"
-            "حساب‌ها باید از قبل توسط مدیریت ثبت شوند.\n"
-            "دانش‌آموز: کد مدرسه|نام|کلاس\n"
-            "تعیین‌کننده: نام کاربری|رمز عبور|نام\n\n"
-            "برای تغییر یا غیرفعال‌کردن حساب از بخش مربوط به دانش‌آموزان یا تعیین‌کنندگان استفاده کنید."
-        )
+        context.user_data["state"] = "admin_users"
+        await update.message.reply_text("👥 مدیریت کاربران\n\n«نمایش»، «فعال»، «غیرفعال» یا «تغییر نقش» را ارسال کنید؛ سپس اطلاعات لازم را جداگانه وارد می‌کنید.")
     elif t in ("📊 گزارش‌ها", "📋 گزارش فعالیت‌ها", "🕐 تاریخچه تغییرات"):
         async with SessionLocal() as s:
             users = await s.scalar(select(User).count()) if False else None
             logs = (await s.execute(select(ActivityLog).order_by(ActivityLog.id.desc()).limit(30))).scalars().all()
             await update.message.reply_text(f"📊 آخرین فعالیت‌ها:\n" + ("\n".join(f"{x.created_at.astimezone(TZ).strftime('%m/%d %H:%M')} | {x.action} | {x.details}" for x in logs) or "هنوز فعالیتی ثبت نشده."))
     elif t == "🗂️ مدیریت فایل‌ها":
-        await update.message.reply_text("فایل‌های جزوات در Telegram به‌صورت file_id نگهداری می‌شوند و نیازی به دیسک Railway ندارند.")
+        context.user_data["state"] = "admin_files"
+        await update.message.reply_text("🗂️ مدیریت فایل‌ها\n\nبرای فهرست فایل‌ها «نمایش» و برای حذف یک فایل «حذف» را ارسال کنید؛ شناسه فایل را در پیام بعدی می‌گیرم.")
     elif t == "⚙️ تنظیمات بات":
         await update.message.reply_text(f"⚙️ تنظیمات فعال\nمنطقه زمانی: {TIMEZONE}\nپایگاه‌داده: {'PostgreSQL' if 'postgres' in DATABASE_URL else 'سایر'}")
     elif t == "🗄️ مدیریت دیتابیس":
@@ -636,7 +632,7 @@ async def show_admin(update, context, u):
         await update.message.reply_text("امنیت: توکن فقط از متغیر محیطی خوانده می‌شود؛ نقش‌ها در DB کنترل می‌شوند؛ اطلاعات حساس در GitHub ذخیره نشده است.")
     elif t == "🔔 ارسال اعلان":
         context.user_data["state"] = "admin_announcement"
-        await update.message.reply_text("برای اعلان: عنوان|متن|نام کلاس اختیاری")
+        await update.message.reply_text("📨 ارسال اعلان\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و کلاس را جداگانه ارسال کنید.")
     elif t == "👨‍🎓 مدیریت تعیین‌کنندگان":
         pass
     else:
@@ -1040,6 +1036,16 @@ async def process_state(update, context, u):
         },
         "admin_tomorrow": {
             "افزودن": [("title","عنوان اطلاعیه فردا را ارسال کنید:"),("body","متن اطلاعیه را ارسال کنید:"),("at","زمان ارسال را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("class","نام کلاس را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")]
+        },
+        "admin_users": {
+            "فعال": [("id","شناسه کاربر را ارسال کنید:")],
+            "غیرفعال": [("id","شناسه کاربر را ارسال کنید:")],
+            "تغییر نقش": [("id","شناسه کاربر را ارسال کنید:"),("role","نقش جدید را ارسال کنید:")],
+            "نمایش": []
+        },
+        "admin_files": {
+            "حذف": [("id","شناسه جزوه/فایل را ارسال کنید:")],
+            "نمایش": []
         }
     }
     if u.role == "ADMIN" and state in admin_wizard_specs:
@@ -1096,11 +1102,57 @@ async def process_state(update, context, u):
             text = "|".join(vals)
         elif state == "admin_tomorrow":
             text = "|".join(vals)
+        elif state == "admin_users":
+            if action == "نمایش": text = "نمایش"
+            elif action in ("فعال", "غیرفعال"): text = action + "|" + vals[0]
+            else: text = action + "|" + "|".join(vals)
+        elif state == "admin_files":
+            if action == "نمایش": text = "نمایش"
+            else: text = action + "|" + vals[0]
 
     if u.role == "ADMIN":
         try:
             async with SessionLocal() as s:
-                if state == "admin_user":
+                if state == "admin_users":
+                    parts=[x.strip() for x in text.split("|", 1)]
+                    action=parts[0]
+                    if action=="نمایش":
+                        rows=(await s.execute(select(User).order_by(User.id))).scalars().all()
+                        lines=[]
+                        for x in rows:
+                            lines.append(f"#{x.id} | {x.name or 'بدون نام'} | {ROLE_NAMES.get(x.role,x.role)} | {'فعال' if x.active else 'غیرفعال'}")
+                        await update.message.reply_text("👥 کاربران:\n" + ("\n".join(lines) or "کاربری ثبت نشده."))
+                    elif action in ("فعال","غیرفعال") and len(parts)==2:
+                        target=await s.get(User,int(parts[1]))
+                        if not target: raise ValueError("کاربر پیدا نشد.")
+                        if target.role=="ADMIN" and action=="غیرفعال": raise ValueError("حساب مدیریت اصلی قابل غیرفعال‌کردن نیست.")
+                        target.active=(action=="فعال")
+                        await s.commit(); await log_action(u.id,"user_status_changed",f"{target.id}|{action}")
+                        await update.message.reply_text("✅ وضعیت کاربر تغییر کرد.")
+                    elif action=="تغییر نقش" and len(parts)==3:
+                        target=await s.get(User,int(parts[1])); role=parts[2].upper()
+                        role_map={"دانش‌آموز":"STUDENT","تعیین‌کننده":"ASSIGNER","مدیریت":"ADMIN","STUDENT":"STUDENT","ASSIGNER":"ASSIGNER","ADMIN":"ADMIN","PENDING":"PENDING"}
+                        role=role_map.get(role,role)
+                        if not target or role not in ("STUDENT","ASSIGNER","ADMIN","PENDING"): raise ValueError("کاربر یا نقش نامعتبر است.")
+                        if target.id==u.id and role!="ADMIN": raise ValueError("نقش مدیریت حساب جاری را نمی‌توانید حذف کنید.")
+                        target.role=role; target.active=(role!="PENDING")
+                        await s.commit(); await log_action(u.id,"user_role_changed",f"{target.id}|{role}")
+                        await update.message.reply_text("✅ نقش کاربر تغییر کرد.")
+                    else:
+                        raise ValueError("فرمت عملیات کاربران درست نیست.")
+                elif state == "admin_files":
+                    parts=[x.strip() for x in text.split("|",1)]
+                    if parts[0]=="نمایش":
+                        rows=(await s.execute(select(Note).order_by(Note.id.desc()).limit(50))).scalars().all()
+                        await update.message.reply_text("🗂️ فایل‌های جزوات:\n"+("\n".join(f"#{n.id} | {n.file_name or 'PDF'} | {n.title}" for n in rows) or "فایلی ثبت نشده."))
+                    elif parts[0]=="حذف" and len(parts)==2:
+                        n=await s.get(Note,int(parts[1]))
+                        if not n: raise ValueError("فایل پیدا نشد.")
+                        await s.delete(n); await s.commit(); await log_action(u.id,"note_deleted",parts[1])
+                        await update.message.reply_text("✅ فایل/جزوه حذف شد.")
+                    else:
+                        raise ValueError("فرمت مدیریت فایل درست نیست.")
+                elif state == "admin_user":
                     tid, name, role = [x.strip() for x in text.split("|", 2)]
                     role = role.upper()
                     if role not in ("STUDENT", "ASSIGNER", "ADMIN", "PENDING"):
