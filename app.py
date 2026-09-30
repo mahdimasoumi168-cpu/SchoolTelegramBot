@@ -609,9 +609,8 @@ async def show_admin(update, context, u):
         context.user_data["state"] = "admin_tomorrow"
         await update.message.reply_text("🔔 اطلاعیه فردا\\n\\nابتدا «افزودن» را ارسال کنید؛ سپس عنوان، متن، زمان و کلاس را جداگانه می‌گیرم.")
     elif t == "❓ مدیریت سؤالات":
-        async with SessionLocal() as s:
-            data = (await s.execute(select(Question, User).join(User, Question.student_user_id == User.id).order_by(Question.id.desc()).limit(50))).all()
-            await update.message.reply_text("\n\n".join(f"#{q.id} [{q.status}] {usr.name}\n{q.text}\nپاسخ: {q.answer or '---'}" for q, usr in data) or "سؤالی ثبت نشده.")
+        context.user_data["state"] = "admin_questions"
+        await update.message.reply_text("❓ مدیریت سؤالات\n\n«نمایش»، «پاسخ» یا «حذف» را ارسال کنید؛ سپس اطلاعات لازم را جداگانه می‌گیرم.")
     elif t == "👥 مدیریت کاربران":
         context.user_data["state"] = "admin_users"
         await update.message.reply_text("👥 مدیریت کاربران\n\n«نمایش»، «فعال»، «غیرفعال» یا «تغییر نقش» را ارسال کنید؛ سپس اطلاعات لازم را جداگانه وارد می‌کنید.")
@@ -1032,10 +1031,19 @@ async def process_state(update, context, u):
             "حذف": [("id","شناسه جزوه را ارسال کنید:")]
         },
         "admin_announcement": {
-            "افزودن": [("title","عنوان اطلاعیه را ارسال کنید:"),("body","متن اطلاعیه را ارسال کنید:"),("class","نام کلاس را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")]
+            "افزودن": [("title","عنوان اطلاعیه را ارسال کنید:"),("body","متن اطلاعیه را ارسال کنید:"),("class","نام کلاس را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")],
+            "ویرایش": [("id","شناسه اطلاعیه را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("body","متن جدید را ارسال کنید:"),("class","نام کلاس جدید را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")],
+            "حذف": [("id","شناسه اطلاعیه را ارسال کنید:")]
         },
         "admin_tomorrow": {
-            "افزودن": [("title","عنوان اطلاعیه فردا را ارسال کنید:"),("body","متن اطلاعیه را ارسال کنید:"),("at","زمان ارسال را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("class","نام کلاس را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")]
+            "افزودن": [("title","عنوان اطلاعیه فردا را ارسال کنید:"),("body","متن اطلاعیه فردا را ارسال کنید:"),("at","زمان ارسال را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("class","نام کلاس را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")],
+            "ویرایش": [("id","شناسه اطلاعیه را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("body","متن جدید را ارسال کنید:"),("at","زمان جدید را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("class","نام کلاس جدید را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")],
+            "حذف": [("id","شناسه اطلاعیه را ارسال کنید:")]
+        },
+        "admin_questions": {
+            "نمایش": [],
+            "پاسخ": [("id","شماره سؤال را ارسال کنید:"),("answer","متن پاسخ را ارسال کنید:")],
+            "حذف": [("id","شماره سؤال را ارسال کنید:")]
         },
         "admin_users": {
             "فعال": [("id","شناسه کاربر را ارسال کنید:")],
@@ -1095,13 +1103,20 @@ async def process_state(update, context, u):
                 context.user_data["state"] = "admin_note_file"
                 await update.message.reply_text("حالا فایل PDF جزوه را ارسال کنید. جزوه‌های قبلی حذف نمی‌شوند و این جزوه به فهرست اضافه می‌شود.")
                 return True
-            text = "حذف|" + vals[0]
-            state = "admin_note_manage"
-            context.user_data["state"] = state
+            if action == "حذف":
+                async with SessionLocal() as s2:
+                    n=await s2.get(Note,int(vals[0]))
+                    if not n: raise ValueError("جزوه پیدا نشد.")
+                    await s2.delete(n); await s2.commit()
+                context.user_data.clear()
+                await update.message.reply_text("✅ جزوه حذف شد.")
+                return True
         elif state == "admin_announcement":
             text = "|".join(vals)
         elif state == "admin_tomorrow":
-            text = "|".join(vals)
+            text = action + "|" + "|".join(vals)
+        elif state == "admin_questions":
+            text = action if action == "نمایش" else action + "|" + "|".join(vals)
         elif state == "admin_users":
             if action == "نمایش": text = "نمایش"
             elif action in ("فعال", "غیرفعال"): text = action + "|" + vals[0]
@@ -1321,29 +1336,73 @@ async def process_state(update, context, u):
                         if not sch: raise ValueError("برنامه پیدا نشد.")
                         await s.delete(sch); await s.commit(); await update.message.reply_text("✅ برنامه حذف شد.")
                     else: raise ValueError("فرمت برنامه درست نیست.")
+                elif state == "admin_questions":
+                    p=[x.strip() for x in text.split("|",2)]
+                    action=p[0]
+                    if action=="نمایش":
+                        data=(await s.execute(select(Question,User).join(User,Question.student_user_id==User.id).order_by(Question.id.desc()).limit(50))).all()
+                        await update.message.reply_text("\n\n".join(f"#{q.id} [{q.status}] {usr.name}\\n{q.text}\\nپاسخ: {q.answer or '---'}" for q,usr in data) or "سؤالی ثبت نشده.")
+                    elif action=="پاسخ" and len(p)==3:
+                        q=await s.get(Question,int(p[1]))
+                        if not q: raise ValueError("سؤال پیدا نشد.")
+                        if q.status!="OPEN": raise ValueError("این سؤال قبلاً پاسخ داده شده است.")
+                        q.answer,q.status=p[2],"ANSWERED"; await s.commit()
+                        student=await s.get(User,q.student_user_id)
+                        if student and student.telegram_id:
+                            try: await context.bot.send_message(student.telegram_id,f"💬 پاسخ سؤال #{q.id}:\\n{p[2]}")
+                            except Exception: log.exception("admin question notification failed")
+                        await log_action(u.id,"admin_question_answered",str(q.id))
+                        await update.message.reply_text("✅ پاسخ سؤال ثبت و برای دانش‌آموز ارسال شد.")
+                    elif action=="حذف" and len(p)==2:
+                        q=await s.get(Question,int(p[1]))
+                        if not q: raise ValueError("سؤال پیدا نشد.")
+                        await s.delete(q); await s.commit(); await log_action(u.id,"admin_question_deleted",p[1])
+                        await update.message.reply_text("✅ سؤال حذف شد.")
+                    else: raise ValueError("عملیات سؤال نامعتبر است.")
                 elif state in ("admin_announcement", "admin_tomorrow"):
-                    p = [x.strip() for x in text.split("|", 3)]
-                    if len(p) < 2 or not p[0] or not p[1]:
-                        raise ValueError("عنوان و متن اطلاعیه الزامی است.")
-                    title, body = p[0], p[1]
-                    if state == "admin_tomorrow":
-                        if len(p) < 3 or not p[2]:
-                            raise ValueError("زمان‌بندی اطلاعیه فردا الزامی است.")
-                        when = parse_dt(p[2])
-                        if when is None:
-                            raise ValueError("زمان‌بندی اطلاعیه فردا نامعتبر است؛ فرمت: YYYY-MM-DD HH:MM")
-                        cls = await get_class_by_name(s, p[3]) if len(p)>3 and p[3] else None
-                        if len(p) > 3 and p[3] and not cls:
-                            raise ValueError("کلاس مشخص‌شده پیدا نشد.")
-                        cid = cls.id if cls else None
-                        kind = "tomorrow"
+                    p = [x.strip() for x in text.split("|", 5)]
+                    action=p[0]
+                    if state=="admin_tomorrow":
+                        if action=="افزودن" and len(p)>=5:
+                            title,body,when_text,class_text=p[1],p[2],p[3],p[4]
+                            when=parse_dt(when_text)
+                            if when is None: raise ValueError("زمان‌بندی نامعتبر است؛ فرمت: YYYY-MM-DD HH:MM")
+                            cls=await get_class_by_name(s,class_text) if class_text and class_text!="همه" else None
+                            if class_text and class_text!="همه" and not cls: raise ValueError("کلاس مشخص‌شده پیدا نشد.")
+                            await create_announcement(context.bot,title,body,cls.id if cls else None,"tomorrow",when,u.id)
+                            await update.message.reply_text("✅ اطلاعیه فردا زمان‌بندی شد.")
+                        elif action=="ویرایش" and len(p)>=6:
+                            a=await s.get(Announcement,int(p[1]))
+                            if not a or a.kind!="tomorrow": raise ValueError("اطلاعیه فردا پیدا نشد.")
+                            when=parse_dt(p[4])
+                            if when is None: raise ValueError("زمان جدید نامعتبر است.")
+                            cls=await get_class_by_name(s,p[5]) if p[5] and p[5]!="همه" else None
+                            if p[5] and p[5]!="همه" and not cls: raise ValueError("کلاس پیدا نشد.")
+                            a.title,a.body,a.scheduled_at,a.class_id,a.sent=p[2],p[3],when,cls.id if cls else None,False
+                            await s.commit(); await update.message.reply_text("✅ اطلاعیه فردا ویرایش شد.")
+                        elif action=="حذف" and len(p)==2:
+                            a=await s.get(Announcement,int(p[1]))
+                            if not a or a.kind!="tomorrow": raise ValueError("اطلاعیه فردا پیدا نشد.")
+                            await s.delete(a); await s.commit(); await update.message.reply_text("✅ اطلاعیه فردا حذف شد.")
+                        else: raise ValueError("عملیات اطلاعیه فردا نامعتبر است.")
                     else:
-                        when = None
-                        cls = await get_class_by_name(s, p[2]) if len(p)>2 and p[2] else None
-                        if len(p) > 2 and p[2] and not cls:
-                            raise ValueError("کلاس مشخص‌شده پیدا نشد.")
-                        cid = cls.id if cls else None
-                        kind = "announcement"
+                        if action=="افزودن" and len(p)>=4:
+                            cls=await get_class_by_name(s,p[3]) if p[3] and p[3]!="همه" else None
+                            if p[3] and p[3]!="همه" and not cls: raise ValueError("کلاس پیدا نشد.")
+                            await create_announcement(context.bot,p[1],p[2],cls.id if cls else None,"announcement",None,u.id)
+                            await update.message.reply_text("✅ اطلاعیه ثبت و ارسال شد.")
+                        elif action=="ویرایش" and len(p)>=5:
+                            a=await s.get(Announcement,int(p[1]))
+                            if not a or a.kind!="announcement": raise ValueError("اطلاعیه پیدا نشد.")
+                            cls=await get_class_by_name(s,p[4]) if p[4] and p[4]!="همه" else None
+                            if p[4] and p[4]!="همه" and not cls: raise ValueError("کلاس پیدا نشد.")
+                            a.title,a.body,a.class_id=p[2],p[3],cls.id if cls else None
+                            await s.commit(); await update.message.reply_text("✅ اطلاعیه ویرایش شد.")
+                        elif action=="حذف" and len(p)==2:
+                            a=await s.get(Announcement,int(p[1]))
+                            if not a or a.kind!="announcement": raise ValueError("اطلاعیه پیدا نشد.")
+                            await s.delete(a); await s.commit(); await update.message.reply_text("✅ اطلاعیه حذف شد.")
+                        else: raise ValueError("عملیات اطلاعیه نامعتبر است.")
                 else:
                     await update.message.reply_text("این بخش در حال حاضر فقط نمایش/تنظیمات است.")
                     context.user_data.clear()
