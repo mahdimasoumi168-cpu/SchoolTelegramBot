@@ -1530,22 +1530,32 @@ async def process_state(update, context, u):
                 subs = await allowed_subjects(s, u)
                 if state == "assigner_assignment":
                     p=[x.strip() for x in text.split("|")]
-                    if p[0]=="افزودن" and len(p)>=4:
+                    allowed_ids={x.id for x in subs}
+                    if p[0]=="افزودن" and len(p)>=5:
                         matches=[x for x in subs if x.name==p[1]]
-                        if len(matches)>1: raise ValueError("نام این درس تکراری است؛ از مدیریت بخواهید دسترسی درس را با نام یکتا تعریف کند.")
+                        if len(matches)>1: raise ValueError("نام این درس تکراری است؛ از مدیریت بخواهید نام درس‌ها را یکتا کنید.")
                         sub=matches[0] if matches else None
                         if not sub: raise ValueError("این درس برای شما مجاز نیست.")
-                        a=Assignment(subject_id=sub.id,title=p[2],body=p[3],due_at=None if len(p)>4 and p[4]=="ندارد" else (parse_dt(p[4]) if len(p)>4 else None),created_by=u.id); s.add(a); await s.commit(); await create_announcement(context.bot,"تکلیف جدید: "+p[2],p[3],sub.class_id,"announcement",None,u.id); await update.message.reply_text("✅ تکلیف ثبت شد و اطلاع‌رسانی شد.")
+                        due=None if p[4]=="ندارد" else parse_dt(p[4])
+                        if p[4]!="ندارد" and due is None: raise ValueError("مهلت نامعتبر است.")
+                        a=Assignment(subject_id=sub.id,title=p[2],body=p[3],due_at=due,created_by=u.id)
+                        s.add(a); await s.commit()
+                        await create_announcement(context.bot,"تکلیف جدید: "+p[2],p[3],sub.class_id,"announcement",None,u.id)
+                        await update.message.reply_text("✅ تکلیف ثبت شد و اطلاع‌رسانی شد.")
                     elif p[0]=="ویرایش" and len(p)>=6:
-                        a=await s.get(Assignment,int(p[1])); matches=[x for x in subs if x.name==p[2]]
-                        if len(matches)>1: raise ValueError("نام این درس تکراری است؛ از مدیریت بخواهید دسترسی درس را با نام یکتا تعریف کند.")
+                        a=await s.get(Assignment,int(p[1]))
+                        matches=[x for x in subs if x.name==p[2]]
+                        if len(matches)>1: raise ValueError("نام این درس تکراری است؛ از مدیریت بخواهید نام درس‌ها را یکتا کنید.")
                         sub=matches[0] if matches else None
                         if not a or not sub: raise ValueError("تکلیف یا درس پیدا نشد.")
-                        if a.subject_id not in {x.id for x in subs}: raise ValueError("به این تکلیف دسترسی ندارید.")
-                        a.subject_id,a.title,a.body,a.due_at=sub.id,p[3],p[4],parse_dt(p[5]); await s.commit(); await update.message.reply_text("✅ تکلیف ویرایش شد.")
+                        if a.subject_id not in allowed_ids: raise ValueError("به این تکلیف دسترسی ندارید.")
+                        due=None if p[5]=="ندارد" else parse_dt(p[5])
+                        if p[5]!="ندارد" and due is None: raise ValueError("مهلت نامعتبر است.")
+                        a.subject_id,a.title,a.body,a.due_at=sub.id,p[3],p[4],due
+                        await s.commit(); await update.message.reply_text("✅ تکلیف ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         a=await s.get(Assignment,int(p[1]))
-                        if not a or a.subject_id not in {x.id for x in subs}: raise ValueError("تکلیف پیدا نشد یا دسترسی ندارید.")
+                        if not a or a.subject_id not in allowed_ids: raise ValueError("تکلیف پیدا نشد یا دسترسی ندارید.")
                         await s.delete(a); await s.commit(); await update.message.reply_text("✅ تکلیف حذف شد.")
                     else: raise ValueError("فرمت تکلیف درست نیست.")
                 elif state == "assigner_exam":
