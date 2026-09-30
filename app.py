@@ -1512,6 +1512,10 @@ async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif u.role != "ADMIN":
             await update.message.reply_text("دسترسی ندارید."); return
         doc = update.message.document
+        if not doc or (doc.mime_type and doc.mime_type != "application/pdf"):
+            await update.message.reply_text("❌ فقط فایل PDF برای جزوه پذیرفته می‌شود.")
+            return
+        # Telegram file_id is stored in PostgreSQL; adding a new note never deletes old notes.
         s.add(Note(subject_id=sub.id, title=meta[1], file_id=doc.file_id, file_name=doc.file_name or "", created_by=u.id))
         await s.commit()
     context.user_data.clear()
