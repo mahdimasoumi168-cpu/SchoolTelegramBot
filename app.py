@@ -1108,7 +1108,7 @@ def parse_dt(value: str) -> datetime | None:
     if not m: return None
     y,mo,d,hh,mi = map(int,m.groups())
     try:
-        if y >= 1300:
+        if 1300 <= y <= 1600:
             if not 1 <= mo <= 12 or not 1 <= d <= 31:
                 return None
             gy,gm,gd = jalali_to_gregorian(y,mo,d)
