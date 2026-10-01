@@ -519,7 +519,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         return
     proxy = callback_update(query, text)
     if u.role == "STUDENT":
-        await show_student(proxy, u)
+        await show_student(proxy, u, context)
     elif u.role == "ASSIGNER":
         await show_assigner(proxy, context, u)
     elif u.role == "ADMIN":
@@ -542,7 +542,7 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply_long(update.message, "با موفقیت خارج شدید. برای ورود دوباره /start را بزنید.", reply_markup=ReplyKeyboardRemove())
 
 
-async def show_student(update, u):
+async def show_student(update, u, context=None):
     if update.message.text == "📚 درس‌های من":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
@@ -628,9 +628,8 @@ async def show_student(update, u):
                         await reply_panel_text(update.message, f"⚠️ فایل جزوه #{n.id} ثبت شده است اما ارسال فایل ناموفق بود.", u)
     elif update.message.text == "❓ سؤال":
         # The normal message handler already provides the real context.
-        context = getattr(update, "_context", None)
         if context is None:
-            # Callback flow is handled in menu_callback before reaching here.
+            await reply_long(update.message, "برای ثبت سؤال، ابتدا /start را بزنید و دوباره گزینه سؤال را انتخاب کنید.")
             return
         context.user_data["state"] = "student_question_text"
         await reply_long(update.message, "❓ سؤال\n\nمتن سؤال را در پیام بعدی ارسال کنید. نیازی به انتخاب درس یا کلاس نیست. برای لغو «انصراف».")
@@ -1145,7 +1144,8 @@ async def create_announcement(bot, title, body, class_id, kind, scheduled_at, cr
         async with SessionLocal() as s:
             a = await s.get(Announcement, aid)
             failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == aid, Delivery.status != "SENT").limit(1))
-            if a and failed is None:
+            delivered = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == aid).limit(1))
+            if a and delivered is not None and failed is None:
                 a.sent = True
             await s.commit()
     return aid
@@ -1160,7 +1160,8 @@ async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
         async with SessionLocal() as s:
             x = await s.get(Announcement, a.id)
             failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == a.id, Delivery.status != "SENT").limit(1))
-            if x and failed is None:
+            delivered = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == a.id).limit(1))
+            if x and delivered is not None and failed is None:
                 x.sent = True
                 await s.commit()
 
@@ -2036,7 +2037,8 @@ async def process_state(update, context, u):
                         async with SessionLocal() as ss:
                             x = await ss.get(Announcement, aid)
                             failed = await ss.scalar(select(Delivery.id).where(Delivery.announcement_id == aid, Delivery.status != "SENT").limit(1))
-                            if x and failed is None:
+                            delivered = await ss.scalar(select(Delivery.id).where(Delivery.announcement_id == aid).limit(1))
+                            if x and delivered is not None and failed is None:
                                 x.sent = True
                                 await ss.commit()
                     await reply_long(update.message, "اطلاعیه برای کلاس‌های مجاز ثبت و ارسال شد.")
@@ -2112,7 +2114,7 @@ async def _message_locked(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "🚪 خروج":
         await logout(update, context); return
     if u.role == "STUDENT":
-        await show_student(update, u)
+        await show_student(update, u, context)
     elif u.role == "ASSIGNER":
         await show_assigner(update, context, u)
     elif u.role == "ADMIN":
