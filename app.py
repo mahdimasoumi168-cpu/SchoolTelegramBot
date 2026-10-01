@@ -550,7 +550,7 @@ async def show_student(update, u):
                 await reply_long(update.message, "هنوز کلاسی برای شما ثبت نشده.")
             else:
                 rows = (await s.execute(select(Subject).where(Subject.class_id == st.class_id).order_by(Subject.name))).scalars().all()
-                await reply_long(update.message, "📚 درس‌های شما:\n" + ("\n".join(f"• {x.name}" for x in rows) or "هنوز درسی ثبت نشده."))
+                await reply_panel_text(update.message, "📚 درس‌های شما:\n" + ("\n".join(f"• {x.name}" for x in rows) or "هنوز درسی ثبت نشده."), u)
     elif update.message.text == "📝 تکالیف":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
@@ -569,7 +569,7 @@ async def show_student(update, u):
                 for a, sub in data:
                     due = a.due_at.astimezone(TZ).strftime("%Y/%m/%d %H:%M") if a.due_at else "بدون مهلت"
                     out.append(f"\n📚 {sub.name}\n• {a.title}\n{a.body}\n⏰ {due}")
-                await reply_long(update.message, "\n".join(out))
+                await reply_panel_text(update.message, "\n".join(out), u)
     elif update.message.text == "📅 برنامه هفتگی":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
@@ -581,7 +581,7 @@ async def show_student(update, u):
             out = ["📅 برنامه هفتگی:"]
             for sch, sub in data:
                 out.append(f"• {sch.weekday} | {sch.period} | {sub.name}")
-            await reply_long(update.message, "\n".join(out) if len(out) > 1 else "برنامه‌ای ثبت نشده.")
+            await reply_panel_text(update.message, "\n".join(out) if len(out) > 1 else "برنامه‌ای ثبت نشده.", u)
     elif update.message.text == "📝 امتحانات":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
@@ -594,7 +594,7 @@ async def show_student(update, u):
             for e, sub in data:
                 dt = e.exam_at.astimezone(TZ).strftime("%Y/%m/%d %H:%M") if e.exam_at else "زمان نامشخص"
                 out.append(f"\n📚 {sub.name}\n• {e.title}\n📅 {dt}\n{e.details}")
-            await reply_long(update.message, "\n".join(out) if len(out) > 1 else "امتحانی ثبت نشده.")
+            await reply_panel_text(update.message, "\n".join(out) if len(out) > 1 else "امتحانی ثبت نشده.", u)
     elif update.message.text in ("📢 اطلاعیه‌ها", "🔔 اطلاعیه فردا"):
         kind = "tomorrow" if update.message.text == "🔔 اطلاعیه فردا" else "announcement"
         async with SessionLocal() as s:
@@ -604,7 +604,7 @@ async def show_student(update, u):
             out = ["🔔 اطلاعیه‌ها:"]
             for a in data:
                 out.append(f"\n📌 {a.title}\n{a.body}")
-            await reply_long(update.message, "\n".join(out) if len(out) > 1 else "اطلاعیه‌ای ثبت نشده.")
+            await reply_panel_text(update.message, "\n".join(out) if len(out) > 1 else "اطلاعیه‌ای ثبت نشده.", u)
     elif update.message.text == "📖 جزوات":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
@@ -619,13 +619,13 @@ async def show_student(update, u):
                 lines = ["📖 جزوات کلاس شما:"]
                 for n, sub in data:
                     lines.append(f"• #{n.id} — {n.title} — {sub.name} — {n.file_name or 'PDF'}")
-                await reply_long(update.message, "\n".join(lines))
+                await reply_panel_text(update.message, "\n".join(lines), u)
                 for n, sub in data:
                     try:
                         await update.message.reply_document(n.file_id, caption=f"📖 جزوه #{n.id}\n📌 عنوان: {n.title}\n📚 درس: {sub.name}\n📎 فایل: {n.file_name or 'PDF'}")
                     except Exception:
                         log.exception("student note delivery failed for note %s", n.id)
-                        await reply_long(update.message, f"⚠️ فایل جزوه #{n.id} ثبت شده است اما ارسال فایل ناموفق بود.")
+                        await reply_panel_text(update.message, f"⚠️ فایل جزوه #{n.id} ثبت شده است اما ارسال فایل ناموفق بود.", u)
     elif update.message.text == "❓ سؤال":
         # The normal message handler already provides the real context.
         context = getattr(update, "_context", None)
@@ -640,7 +640,7 @@ async def show_student(update, u):
             cls = None
             if st and st.class_id:
                 cls = (await s.execute(select(ClassRoom).where(ClassRoom.id == st.class_id))).scalar_one_or_none()
-            await reply_long(update.message, f"👤 حساب کاربری\nنام: {u.name}\nنقش: {ROLE_NAMES[u.role]}\nکلاس: {cls.name if cls else 'ثبت نشده'}")
+            await reply_panel_text(update.message, f"👤 حساب کاربری\nنام: {u.name}\nنقش: {ROLE_NAMES[u.role]}\nکلاس: {cls.name if cls else 'ثبت نشده'}", u)
     else:
         await reply_long(update.message, "برای انتخاب گزینه از دکمه‌های پنل استفاده کنید.", reply_markup=keyboard(STUDENT_MENU))
 
@@ -773,10 +773,10 @@ async def panel_inquiry_text(s, u, menu_text):
             rows=(await s.execute(stmt.order_by(Question.id.desc()).limit(50))).all()
             return "❓ سؤالات باز:\n"+("\n\n".join(f"#{q.id} | {usr.name}\n{q.text}" for q,usr in rows) or "سؤال بازی پیدا نشد.")
         if menu_text == "🔔 اطلاعیه فردا":
-            rows=(await s.execute(select(Announcement).where(Announcement.kind=="tomorrow").order_by(Announcement.id.desc()).limit(50))).scalars().all()
+            rows=(await s.execute(select(Announcement).where(Announcement.kind=="tomorrow", or_(Announcement.class_id.is_(None), Announcement.class_id.in_(class_ids) if class_ids else Announcement.id == -1)).order_by(Announcement.id.desc()).limit(50))).scalars().all()
             return "🔔 اطلاعیه‌های فردا:\n"+("\n\n".join(f"#{a.id} | {a.title}\n{a.body}" for a in rows) or "اطلاعیه فردایی ثبت نشده.")
         if menu_text == "📢 ارسال اطلاعیه":
-            rows=(await s.execute(select(Announcement).where(Announcement.kind=="announcement").order_by(Announcement.id.desc()).limit(50))).scalars().all()
+            rows=(await s.execute(select(Announcement).where(Announcement.kind=="announcement", or_(Announcement.class_id.is_(None), Announcement.class_id.in_(class_ids) if class_ids else Announcement.id == -1)).order_by(Announcement.id.desc()).limit(50))).scalars().all()
             return "📢 اطلاعیه‌های موجود:\n"+("\n\n".join(f"#{a.id} | {a.title}\n{a.body}" for a in rows) or "اطلاعیه‌ای ثبت نشده.")
     if u.role == "ADMIN":
         if menu_text == "👨‍🎓 مدیریت دانش‌آموزان":
