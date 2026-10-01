@@ -1108,7 +1108,14 @@ def parse_dt(value: str) -> datetime | None:
     if not m: return None
     y,mo,d,hh,mi = map(int,m.groups())
     try:
-        gy,gm,gd = jalali_to_gregorian(y,mo,d) if y >= 1300 else (y,mo,d)
+        if y >= 1300:
+            if not 1 <= mo <= 12 or not 1 <= d <= 31:
+                return None
+            gy,gm,gd = jalali_to_gregorian(y,mo,d)
+            if gregorian_to_jalali(gy,gm,gd) != (y,mo,d):
+                return None
+        else:
+            gy,gm,gd = y,mo,d
         return datetime(gy,gm,gd,hh,mi,tzinfo=TZ).astimezone(timezone.utc)
     except (ValueError,OverflowError): return None
 
