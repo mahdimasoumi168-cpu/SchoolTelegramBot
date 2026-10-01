@@ -491,6 +491,37 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         await advance_wizard_field(callback_update(query, query.message.text or ""), context, u, flow_key)
         return
 
+    if data.startswith("note_date:"):
+        try:
+            selected = datetime.strptime(data.split(":", 1)[1], "%Y-%m-%d").date()
+        except ValueError:
+            await reply_long(query.message, "تاریخ انتخاب‌شده معتبر نیست.")
+            return
+        u = await db_user(query.from_user.id)
+        if not u or not u.active or u.role != "STUDENT":
+            await reply_long(query.message, "برای مشاهده جزوات ابتدا به حساب دانش‌آموز وارد شوید.")
+            return
+        async with SessionLocal() as s:
+            st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+            if not st or not st.class_id:
+                await reply_long(query.message, "کلاس شما مشخص نیست.")
+                return
+            all_rows = (await s.execute(select(Note, Subject).join(Subject, Note.subject_id == Subject.id).where(Subject.class_id == st.class_id).order_by(Note.created_at.desc(), Note.id.desc()))).all()
+        chosen = [(n, sub) for n, sub in all_rows if n.created_at and n.created_at.astimezone(TZ).date() == selected]
+        if not chosen:
+            await reply_long(query.message, "در این تاریخ جزوه‌ای ثبت نشده است.", reply_markup=back_to_panel_markup("STUDENT"))
+            return
+        jy, jm, jd = gregorian_to_jalali(selected.year, selected.month, selected.day)
+        for n, sub in chosen:
+            try:
+                file_label = n.file_name or "PDF"
+                caption = f"📖 جزوه #{n.id}\n📅 تاریخ: {jy:04d}/{jm:02d}/{jd:02d}\n📌 عنوان: {n.title}\n📚 درس: {sub.name}\n📎 فایل: {file_label}"
+                await query.message.reply_document(n.file_id, caption=caption)
+            except Exception:
+                log.exception("student note delivery failed for note %s", n.id)
+                await reply_long(query.message, f"⚠️ ارسال جزوه #{n.id} ناموفق بود.")
+        await reply_long(query.message, "پایان جزوه‌های این تاریخ.", reply_markup=back_to_panel_markup("STUDENT"))
+        return
     if not data.startswith("menu:"):
         return
     text = data[5:]
@@ -610,23 +641,19 @@ async def show_student(update, u, context=None):
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
             if not st or not st.class_id:
-                await reply_long(update.message, "کلاس شما مشخص نیست.")
+                await reply_panel_text(update.message, "کلاس شما مشخص نیست.", u)
                 return
-            q = await s.execute(select(Note, Subject).join(Subject, Note.subject_id == Subject.id).where(Subject.class_id == st.class_id).order_by(Note.id.desc()))
-            data = q.all()
+            data = (await s.execute(select(Note, Subject).join(Subject, Note.subject_id == Subject.id).where(Subject.class_id == st.class_id).order_by(Note.created_at.desc(), Note.id.desc()))).all()
             if not data:
-                await reply_long(update.message, "📖 جزوه‌ای برای کلاس شما پیدا نشد.")
-            else:
-                lines = ["📖 جزوات کلاس شما:"]
-                for n, sub in data:
-                    lines.append(f"• #{n.id} — {n.title} — {sub.name} — {n.file_name or 'PDF'}")
-                await reply_panel_text(update.message, "\n".join(lines), u)
-                for n, sub in data:
-                    try:
-                        await update.message.reply_document(n.file_id, caption=f"📖 جزوه #{n.id}\n📌 عنوان: {n.title}\n📚 درس: {sub.name}\n📎 فایل: {n.file_name or 'PDF'}")
-                    except Exception:
-                        log.exception("student note delivery failed for note %s", n.id)
-                        await reply_panel_text(update.message, f"⚠️ فایل جزوه #{n.id} ثبت شده است اما ارسال فایل ناموفق بود.", u)
+                await reply_panel_text(update.message, "📖 هنوز جزوه‌ای برای کلاس شما ثبت نشده است.", u)
+                return
+            dates = sorted({n.created_at.astimezone(TZ).date() for n, _ in data if n.created_at}, reverse=True)
+            buttons = []
+            for day in dates:
+                jy, jm, jd = gregorian_to_jalali(day.year, day.month, day.day)
+                buttons.append([InlineKeyboardButton(f"📅 {jy:04d}/{jm:02d}/{jd:02d}", callback_data=f"note_date:{day.isoformat()}")])
+            buttons.append([InlineKeyboardButton("بازگشت به پنل دانش‌آموز", callback_data="menu:__BACK_PANEL__")])
+            await reply_long(update.message, "📖 جزوات بر اساس تاریخ بارگذاری\n\nتاریخ موردنظر را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(buttons))
     elif update.message.text == "❓ سؤال":
         # The normal message handler already provides the real context.
         if context is None:
@@ -2261,7 +2288,7 @@ def main():
         .build()
     )
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:)"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:|note_date:)"))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
     app.add_error_handler(error_handler)
