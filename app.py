@@ -599,7 +599,7 @@ async def show_student(update, u, context=None):
             else:
                 out = ["📝 تکالیف:"]
                 for a, sub in data:
-                    due = a.due_at.astimezone(TZ).strftime("%Y/%m/%d %H:%M") if a.due_at else "بدون مهلت"
+                    due = format_jalali_dt(a.due_at) if a.due_at else "بدون مهلت"
                     out.append(f"\n📚 {sub.name}\n• {a.title}\n{a.body}\n⏰ {due}")
                 await reply_panel_text(update.message, "\n".join(out), u)
     elif update.message.text == "📅 برنامه هفتگی":
@@ -624,7 +624,7 @@ async def show_student(update, u, context=None):
             data = q.all()
             out = ["📝 امتحانات:"]
             for e, sub in data:
-                dt = e.exam_at.astimezone(TZ).strftime("%Y/%m/%d %H:%M") if e.exam_at else "زمان نامشخص"
+                dt = format_jalali_dt(e.exam_at) if e.exam_at else "زمان نامشخص"
                 out.append(f"\n📚 {sub.name}\n• {e.title}\n📅 {dt}\n{e.details}")
             await reply_panel_text(update.message, "\n".join(out) if len(out) > 1 else "امتحانی ثبت نشده.", u)
     elif update.message.text in ("📢 اطلاعیه‌ها", "🔔 اطلاعیه فردا"):
@@ -783,13 +783,13 @@ async def panel_inquiry_text(s, u, menu_text):
             return "📚 درس‌های موجود:\n"+("\n".join(f"#{sub.id} | {sub.name} | کلاس: {cls.name}" for sub,cls in rows) or "درسی برای دسترسی شما پیدا نشد.")
         if menu_text == "📝 تکالیف":
             rows=(await s.execute(select(Assignment,Subject).join(Subject,Assignment.subject_id==Subject.id).where(Assignment.subject_id.in_(subject_ids) if subject_ids else Assignment.id==-1).order_by(Assignment.id.desc()).limit(50))).all()
-            return "📝 تکالیف موجود:\n"+("\n\n".join(f"#{a.id} | 📚 {sub.name}\n• {a.title}\n{a.body}\n⏰ {a.due_at.astimezone(TZ).strftime('%Y/%m/%d %H:%M') if a.due_at else 'بدون مهلت'}" for a,sub in rows) or "تکلیفی پیدا نشد.")
+            return "📝 تکالیف موجود:\n"+("\n\n".join(f"#{a.id} | 📚 {sub.name}\n• {a.title}\n{a.body}\n⏰ {format_jalali_dt(a.due_at) if a.due_at else 'بدون مهلت'}" for a,sub in rows) or "تکلیفی پیدا نشد.")
         if menu_text == "📅 برنامه هفتگی":
             rows=(await s.execute(select(Schedule,Subject,ClassRoom).join(Subject,Schedule.subject_id==Subject.id).join(ClassRoom,Schedule.class_id==ClassRoom.id).where(Schedule.class_id.in_(class_ids) if class_ids else Schedule.id==-1).order_by(Schedule.id.desc()).limit(100))).all()
             return "📅 برنامه‌های موجود:\n"+("\n".join(f"#{sch.id} | کلاس: {cls.name} | {sch.weekday} | {sch.period} | 📚 {sub.name}" for sch,sub,cls in rows) or "برنامه‌ای پیدا نشد.")
         if menu_text == "📝 امتحانات":
             rows=(await s.execute(select(Exam,Subject).join(Subject,Exam.subject_id==Subject.id).where(Exam.subject_id.in_(subject_ids) if subject_ids else Exam.id==-1).order_by(Exam.id.desc()).limit(50))).all()
-            return "📝 امتحانات موجود:\n"+("\n\n".join(f"#{e.id} | 📚 {sub.name} | {e.title}\n📅 {e.exam_at.astimezone(TZ).strftime('%Y/%m/%d %H:%M') if e.exam_at else 'زمان نامشخص'}\n{e.details}" for e,sub in rows) or "امتحانی پیدا نشد.")
+            return "📝 امتحانات موجود:\n"+("\n\n".join(f"#{e.id} | 📚 {sub.name} | {e.title}\n📅 {format_jalali_dt(e.exam_at) if e.exam_at else 'زمان نامشخص'}\n{e.details}" for e,sub in rows) or "امتحانی پیدا نشد.")
         if menu_text == "📖 جزوات":
             rows=(await s.execute(select(Note,Subject).join(Subject,Note.subject_id==Subject.id).where(Note.subject_id.in_(subject_ids) if subject_ids else Note.id==-1).order_by(Note.id.desc()).limit(50))).all()
             return "📖 جزوات موجود:\n"+("\n\n".join(f"#{n.id} | 📚 {sub.name}\n📌 عنوان: {n.title}\n📎 فایل: {n.file_name or 'PDF'}\n🆔 File ID: {n.file_id}" for n,sub in rows) or "جزوه‌ای برای دسترسی شما پیدا نشد.")
@@ -823,10 +823,10 @@ async def panel_inquiry_text(s, u, menu_text):
             return "🔐 دسترسی‌های موجود:\n"+("\n".join(f"#{a.id} | {usr.name} | کاربری: {usr.login_username or '---'} | کلاس: {cls.name} | درس: {sub.name if sub else 'همه'}" for a,usr,cls,sub in rows) or "دسترسی‌ای ثبت نشده.")
         if menu_text == "📝 مدیریت تکالیف":
             rows=(await s.execute(select(Assignment,Subject).join(Subject,Assignment.subject_id==Subject.id).order_by(Assignment.id.desc()).limit(100))).all()
-            return "📝 تکالیف موجود:\n"+("\n\n".join(f"#{a.id} | 📚 {sub.name}\n• {a.title}\n{a.body}\n⏰ {a.due_at.astimezone(TZ).strftime('%Y/%m/%d %H:%M') if a.due_at else 'بدون مهلت'}" for a,sub in rows) or "تکلیفی ثبت نشده.")
+            return "📝 تکالیف موجود:\n"+("\n\n".join(f"#{a.id} | 📚 {sub.name}\n• {a.title}\n{a.body}\n⏰ {format_jalali_dt(a.due_at) if a.due_at else 'بدون مهلت'}" for a,sub in rows) or "تکلیفی ثبت نشده.")
         if menu_text == "📝 مدیریت امتحانات":
             rows=(await s.execute(select(Exam,Subject).join(Subject,Exam.subject_id==Subject.id).order_by(Exam.id.desc()).limit(100))).all()
-            return "📝 امتحانات موجود:\n"+("\n\n".join(f"#{e.id} | 📚 {sub.name} | {e.title}\n📅 {e.exam_at.astimezone(TZ).strftime('%Y/%m/%d %H:%M') if e.exam_at else 'زمان نامشخص'}\n{e.details}" for e,sub in rows) or "امتحانی ثبت نشده.")
+            return "📝 امتحانات موجود:\n"+("\n\n".join(f"#{e.id} | 📚 {sub.name} | {e.title}\n📅 {format_jalali_dt(e.exam_at) if e.exam_at else 'زمان نامشخص'}\n{e.details}" for e,sub in rows) or "امتحانی ثبت نشده.")
         if menu_text == "📅 مدیریت برنامه هفتگی":
             rows=(await s.execute(select(Schedule,Subject,ClassRoom).join(Subject,Schedule.subject_id==Subject.id).join(ClassRoom,Schedule.class_id==ClassRoom.id).order_by(Schedule.id.desc()).limit(100))).all()
             return "📅 برنامه‌های موجود:\n"+("\n".join(f"#{sch.id} | کلاس: {cls.name} | {sch.weekday} | {sch.period} | 📚 {sub.name}" for sch,sub,cls in rows) or "برنامه‌ای ثبت نشده.")
@@ -850,7 +850,7 @@ async def panel_inquiry_text(s, u, menu_text):
             return "🗂️ فایل‌های جزوات:\n"+("\n".join(f"#{n.id} | {n.file_name or 'PDF'} | {n.title}" for n in rows) or "فایلی ثبت نشده.")
         if menu_text in ("📊 گزارش‌ها","📋 گزارش فعالیت‌ها","🕐 تاریخچه تغییرات"):
             rows=(await s.execute(select(ActivityLog).order_by(ActivityLog.id.desc()).limit(100))).scalars().all()
-            return "📊 آخرین فعالیت‌ها:\n"+("\n".join(f"#{x.id} | {x.created_at.astimezone(TZ).strftime('%Y/%m/%d %H:%M')} | {x.action} | {x.details}" for x in rows) or "فعالیتی ثبت نشده.")
+            return "📊 آخرین فعالیت‌ها:\n"+("\n".join(f"#{x.id} | {format_jalali_dt(x.created_at)} | {x.action} | {x.details}" for x in rows) or "فعالیتی ثبت نشده.")
         if menu_text == "🗄️ مدیریت دیتابیس":
             return "🗄️ وضعیت دیتابیس: متصل و سالم ✅" if await s.scalar(select(1)) == 1 else "❌ خطا در اتصال دیتابیس."
         if menu_text == "🔒 تنظیمات امنیتی":
@@ -1044,7 +1044,7 @@ async def show_admin(update, context, u):
         async with SessionLocal() as s:
             users = await s.scalar(select(User).count()) if False else None
             logs = (await s.execute(select(ActivityLog).order_by(ActivityLog.id.desc()).limit(30))).scalars().all()
-            await reply_long(update.message, f"📊 آخرین فعالیت‌ها:\n" + ("\n".join(f"{x.created_at.astimezone(TZ).strftime('%m/%d %H:%M')} | {x.action} | {x.details}" for x in logs) or "هنوز فعالیتی ثبت نشده."))
+            await reply_long(update.message, f"📊 آخرین فعالیت‌ها:\n" + ("\n".join(f"{format_jalali_dt(x.created_at)} | {x.action} | {x.details}" for x in logs) or "هنوز فعالیتی ثبت نشده."))
     elif t == "🗂️ مدیریت فایل‌ها":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
@@ -1234,6 +1234,10 @@ async def process_state(update, context, u):
     if text == "انصراف":
         context.user_data.clear()
         await panel(update, "عملیات لغو شد.")
+        return True
+
+    if state in ("admin_note_file", "assigner_note_file"):
+        await reply_long(update.message, "📎 لطفاً فایل جزوه را به‌صورت PDF ارسال کنید. برای لغو «انصراف» را بزنید.")
         return True
 
     if state == "auth_student_school_code":
@@ -1481,13 +1485,13 @@ async def process_state(update, context, u):
             "حذف": [("id","شناسه دسترسی را ارسال کنید:")]
         },
         "admin_assignment": {
-            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان تکلیف را ارسال کنید:"),("body","متن تکلیف را ارسال کنید:"),("due","مهلت را با فرمت YYYY-MM-DD HH:MM ارسال کنید؛ اگر ندارد «ندارد»:")],
-            "ویرایش": [("id","شناسه تکلیف را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("body","متن جدید را ارسال کنید:"),("due","مهلت جدید را با فرمت YYYY-MM-DD HH:MM یا «ندارد» ارسال کنید:")],
+            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان تکلیف را ارسال کنید:"),("body","متن تکلیف را ارسال کنید:"),("due","مهلت را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "ویرایش": [("id","شناسه تکلیف را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("body","متن جدید را ارسال کنید:"),("due","مهلت جدید را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ یا «ندارد» ارسال کنید:")],
             "حذف": [("id","شناسه تکلیف را ارسال کنید:")]
         },
         "admin_exam": {
-            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان امتحان را ارسال کنید:"),("at","تاریخ و ساعت را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("details","توضیحات را ارسال کنید؛ اگر ندارد «ندارد»:")],
-            "ویرایش": [("id","شناسه امتحان را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("at","تاریخ و ساعت جدید را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("details","توضیحات جدید را ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان امتحان را ارسال کنید:"),("at","تاریخ و ساعت را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ ارسال کنید:"),("details","توضیحات را ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "ویرایش": [("id","شناسه امتحان را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("at","تاریخ و ساعت جدید را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ ارسال کنید:"),("details","توضیحات جدید را ارسال کنید؛ اگر ندارد «ندارد»:")],
             "حذف": [("id","شناسه امتحان را ارسال کنید:")]
         },
         "admin_schedule": {
@@ -1505,8 +1509,8 @@ async def process_state(update, context, u):
             "حذف": [("id","شناسه اطلاعیه را ارسال کنید:")]
         },
         "admin_tomorrow": {
-            "افزودن": [("title","عنوان اطلاعیه فردا را ارسال کنید:"),("body","متن اطلاعیه فردا را ارسال کنید:"),("at","زمان ارسال را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("class","نام کلاس را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")],
-            "ویرایش": [("id","شناسه اطلاعیه را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("body","متن جدید را ارسال کنید:"),("at","زمان جدید را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("class","نام کلاس جدید را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")],
+            "افزودن": [("title","عنوان اطلاعیه فردا را ارسال کنید:"),("body","متن اطلاعیه فردا را ارسال کنید:"),("at","زمان ارسال را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ ارسال کنید:"),("class","نام کلاس را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")],
+            "ویرایش": [("id","شناسه اطلاعیه را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("body","متن جدید را ارسال کنید:"),("at","زمان جدید را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ ارسال کنید:"),("class","نام کلاس جدید را ارسال کنید؛ برای همه کلاس‌ها «همه» بنویسید:")],
             "حذف": [("id","شناسه اطلاعیه را ارسال کنید:")]
         },
         "admin_questions": {
@@ -1845,7 +1849,7 @@ async def process_state(update, context, u):
                         if action=="افزودن" and len(p)>=5:
                             title,body,when_text,class_text=p[1],p[2],p[3],p[4]
                             when=parse_dt(when_text)
-                            if when is None: raise ValueError("زمان‌بندی نامعتبر است؛ فرمت: YYYY-MM-DD HH:MM")
+                            if when is None: raise ValueError("زمان‌بندی نامعتبر است؛ فرمت: تاریخ شمسی مانند ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰")
                             cls=await get_class_by_name(s,class_text) if class_text and class_text!="همه" else None
                             if class_text and class_text!="همه" and not cls: raise ValueError("کلاس مشخص‌شده پیدا نشد.")
                             await create_announcement(context.bot,title,body,cls.id if cls else None,"tomorrow",when,u.id)
@@ -1883,8 +1887,9 @@ async def process_state(update, context, u):
                             await s.delete(a); await s.commit(); await reply_long(update.message, "✅ اطلاعیه حذف شد.")
                         else: raise ValueError("عملیات اطلاعیه نامعتبر است.")
                 else:
-                    await reply_long(update.message, "این بخش در حال حاضر فقط نمایش/تنظیمات است.")
+                    log.warning("Unhandled admin text state: %s", state)
                     context.user_data.clear()
+                    await reply_long(update.message, "این عملیات در حال حاضر فعال نیست. به پنل مدیریت برگشتید.", reply_markup=keyboard(ADMIN_MENU))
                     return True
             if state in ("admin_announcement", "admin_tomorrow"):
                 await create_announcement(context.bot, title, body, cid, kind, when, u.id)
@@ -1938,13 +1943,13 @@ async def process_state(update, context, u):
     # Legacy pipe-separated commands remain supported for compatibility.
     assigner_wizard_specs = {
         "assigner_assignment": {
-            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان تکلیف را ارسال کنید:"),("body","متن تکلیف را ارسال کنید:"),("due","مهلت را با فرمت YYYY-MM-DD HH:MM ارسال کنید؛ اگر ندارد «ندارد»:")],
-            "ویرایش": [("id","شناسه تکلیف را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("body","متن جدید را ارسال کنید:"),("due","مهلت جدید را با فرمت YYYY-MM-DD HH:MM یا «ندارد» ارسال کنید:")],
+            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان تکلیف را ارسال کنید:"),("body","متن تکلیف را ارسال کنید:"),("due","مهلت را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "ویرایش": [("id","شناسه تکلیف را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("body","متن جدید را ارسال کنید:"),("due","مهلت جدید را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ یا «ندارد» ارسال کنید:")],
             "حذف": [("id","شناسه تکلیف را ارسال کنید:")]
         },
         "assigner_exam": {
-            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان امتحان را ارسال کنید:"),("at","تاریخ و ساعت را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("details","توضیحات را ارسال کنید؛ اگر ندارد «ندارد»:")],
-            "ویرایش": [("id","شناسه امتحان را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("at","تاریخ و ساعت جدید را با فرمت YYYY-MM-DD HH:MM ارسال کنید:"),("details","توضیحات جدید را ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان امتحان را ارسال کنید:"),("at","تاریخ و ساعت را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ ارسال کنید:"),("details","توضیحات را ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "ویرایش": [("id","شناسه امتحان را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("at","تاریخ و ساعت جدید را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ ارسال کنید:"),("details","توضیحات جدید را ارسال کنید؛ اگر ندارد «ندارد»:")],
             "حذف": [("id","شناسه امتحان را ارسال کنید:")]
         },
         "assigner_schedule": {
@@ -1956,7 +1961,7 @@ async def process_state(update, context, u):
             "افزودن": [("title","عنوان اطلاعیه را ارسال کنید:"),("body","متن اطلاعیه را ارسال کنید:")]
         },
         "assigner_tomorrow": {
-            "افزودن": [("title","عنوان اطلاعیه فردا را ارسال کنید:"),("body","متن اطلاعیه را ارسال کنید:"),("at","زمان ارسال را با فرمت YYYY-MM-DD HH:MM ارسال کنید:")]
+            "افزودن": [("title","عنوان اطلاعیه فردا را ارسال کنید:"),("body","متن اطلاعیه را ارسال کنید:"),("at","زمان ارسال را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ ارسال کنید:")]
         },
         "assigner_answer": {
             "پاسخ": [("id","شماره سؤال را ارسال کنید:"),("answer","متن پاسخ را ارسال کنید:")]
@@ -2107,7 +2112,7 @@ async def process_state(update, context, u):
                 elif state == "assigner_tomorrow":
                     parts = [x.strip() for x in text.split("|", 2)]
                     if len(parts) != 3 or not all(parts):
-                        raise ValueError("فرمت درست: عنوان|متن|YYYY-MM-DD HH:MM")
+                        raise ValueError("فرمت درست: عنوان|متن|تاریخ شمسی مانند ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰")
                     title, body, when = parts
                     scheduled_at = parse_dt(when)
                     if scheduled_at is None:
