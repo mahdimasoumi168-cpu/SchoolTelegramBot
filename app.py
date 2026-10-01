@@ -1898,9 +1898,6 @@ async def process_state(update, context, u):
                     context.user_data.clear()
                     await reply_long(update.message, "این عملیات در حال حاضر فعال نیست. به پنل مدیریت برگشتید.", reply_markup=keyboard(ADMIN_MENU))
                     return True
-            if state in ("admin_announcement", "admin_tomorrow"):
-                await create_announcement(context.bot, title, body, cid, kind, when, u.id)
-                await reply_long(update.message, "اطلاعیه ثبت شد.")
         except Exception as e:
             log.exception("admin state")
             await reply_long(update.message, f"❌ خطا: {str(e)}")
