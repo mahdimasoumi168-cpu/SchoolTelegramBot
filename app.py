@@ -700,7 +700,16 @@ async def wizard_choice_options(s, u, flow, key):
             rows = [await s.get(ClassRoom, st.class_id)] if st and st.class_id else []
         else:
             rows = []
-        return [(x.id, x.name) for x in rows if x]
+        options = [(x.id, x.name) for x in rows if x]
+        # Broadcast destinations are explicit and available only to management
+        # announcement/scheduled-notification wizards.
+        if (
+            u.role == "ADMIN"
+            and key == "class"
+            and flow.get("state") in ("admin_announcement", "admin_tomorrow")
+        ):
+            options.insert(0, (0, "همه"))
+        return options
 
     if key == "subject":
         if u.role == "ADMIN":
@@ -1539,8 +1548,10 @@ async def process_state(update, context, u):
     if u.role == "ADMIN" and state in admin_wizard_specs:
         flow = context.user_data.get("admin_flow")
         if not flow:
+            # Keep the current wizard state available to choice callbacks so
+            # class/subject option generation can distinguish broadcast flows.
             if text in admin_wizard_specs[state]:
-                context.user_data["admin_flow"] = {"action": text, "i": 0, "values": []}
+                context.user_data["admin_flow"] = {"action": text, "i": 0, "values": [], "state": state}
                 fields = admin_wizard_specs[state][text]
                 context.user_data["admin_flow"]["fields"] = fields
                 if fields:
