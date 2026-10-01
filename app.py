@@ -1455,7 +1455,7 @@ async def process_state(update, context, u):
                 return_exceptions=True,
             )
             context.user_data.clear()
-            await reply_long(update.message, "سؤال شما ثبت شد و برای تعیین‌کننده/مدیریت ارسال شد. اگر درس را مشخص کرده باشید، فقط تعیین‌کنندگان مجاز همان درس آن را می‌بینند.", reply_markup=keyboard(STUDENT_MENU))
+            await reply_long(update.message, "سؤال شما ثبت شد و برای مدیریت و تعیین‌کنندگان دارای دسترسی ارسال شد.", reply_markup=keyboard(STUDENT_MENU))
         except ValueError as e:
             await reply_long(update.message, f"❌ {e}\nدوباره بفرستید یا «انصراف» را بزنید.")
         except Exception:
@@ -1615,7 +1615,7 @@ async def process_state(update, context, u):
         try:
             async with SessionLocal() as s:
                 if state == "admin_users":
-                    parts=[x.strip() for x in text.split("|", 1)]
+                    parts=[x.strip() for x in text.split("|", 2)]
                     action=parts[0]
                     if action=="نمایش":
                         rows=(await s.execute(select(User).order_by(User.id))).scalars().all()
