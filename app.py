@@ -1214,7 +1214,7 @@ async def create_announcement(bot, title, body, class_id, kind, scheduled_at, cr
             a = await s.get(Announcement, aid)
             failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == aid, Delivery.status != "SENT").limit(1))
             delivered = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == aid).limit(1))
-            if a and delivered is not None and failed is None:
+            if a and (delivered is None or failed is None):
                 a.sent = True
             await s.commit()
     return aid
@@ -1230,7 +1230,7 @@ async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
             x = await s.get(Announcement, a.id)
             failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == a.id, Delivery.status != "SENT").limit(1))
             delivered = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == a.id).limit(1))
-            if x and delivered is not None and failed is None:
+            if x and (delivered is None or failed is None):
                 x.sent = True
                 await s.commit()
 
@@ -1707,7 +1707,10 @@ async def process_state(update, context, u):
                     elif p[0]=="ویرایش" and len(p)==5:
                         st=await s.get(Student,int(p[1])); c0=await get_class_by_name(s,p[4])
                         if not st or not c0: raise ValueError("دانش‌آموز یا کلاس پیدا نشد.")
-                        st.school_code,st.login_name,st.class_id=p[2],norm_name(p[3]),c0.id
+                        new_school,new_login=p[2],norm_name(p[3])
+                        duplicate=await s.scalar(select(Student.id).where(Student.school_code==new_school,Student.login_name==new_login,Student.id!=st.id).limit(1))
+                        if duplicate: raise ValueError("این کد مدرسه و نام دانش‌آموز قبلاً برای حساب دیگری ثبت شده است.")
+                        st.school_code,st.login_name,st.class_id=new_school,new_login,c0.id
                         target=await s.get(User,st.user_id); target.name=p[3]; target.active=True
                         await s.commit(); await reply_long(update.message, "✅ اطلاعات دانش‌آموز ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
@@ -1751,11 +1754,13 @@ async def process_state(update, context, u):
                         sub=await s.get(Subject,int(p[1]))
                         c0=await get_class_by_name(s,p[3])
                         if not sub or not c0: raise ValueError("درس یا کلاس پیدا نشد.")
+                        duplicate=await s.scalar(select(Subject.id).where(Subject.name==p[2],Subject.class_id==c0.id,Subject.id!=sub.id).limit(1))
+                        if duplicate: raise ValueError("این درس قبلاً در این کلاس ثبت شده است.")
                         sub.name,sub.class_id=p[2],c0.id; await s.commit(); await reply_long(update.message, "✅ درس ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         sub=await s.get(Subject,int(p[1]))
                         if not sub: raise ValueError("درس پیدا نشد.")
-                        deps=[await s.scalar(select(Assignment.id).where(Assignment.subject_id==sub.id).limit(1)),await s.scalar(select(Exam.id).where(Exam.subject_id==sub.id).limit(1)),await s.scalar(select(Schedule.id).where(Schedule.subject_id==sub.id).limit(1)),await s.scalar(select(Note.id).where(Note.subject_id==sub.id).limit(1)),await s.scalar(select(Question.id).where(Question.subject_id==sub.id).limit(1))]
+                        deps=[await s.scalar(select(Assignment.id).where(Assignment.subject_id==sub.id).limit(1)),await s.scalar(select(Exam.id).where(Exam.subject_id==sub.id).limit(1)),await s.scalar(select(Schedule.id).where(Schedule.subject_id==sub.id).limit(1)),await s.scalar(select(Note.id).where(Note.subject_id==sub.id).limit(1)),await s.scalar(select(Question.id).where(Question.subject_id==sub.id).limit(1)),await s.scalar(select(Access.id).where(Access.subject_id==sub.id).limit(1))]
                         if any(x is not None for x in deps): raise ValueError("این درس هنوز وابستگی دارد؛ ابتدا وابستگی‌ها را مدیریت کنید.")
                         await s.delete(sub); await s.commit(); await reply_long(update.message, "✅ درس حذف شد.")
                     else: raise ValueError("فرمت عملیات درس درست نیست.")
@@ -1779,7 +1784,8 @@ async def process_state(update, context, u):
                         if p[0]=="افزودن" and len(p)>=4:
                             sub=await get_subject_by_name(s,p[1])
                             if not sub: raise ValueError("درس پیدا نشد.")
-                            due=parse_dt(p[4]) if len(p)>4 else None
+                            due=None if len(p)<=4 or p[4]=="ندارد" else parse_dt(p[4])
+                            if len(p)>4 and p[4]!="ندارد" and due is None: raise ValueError("مهلت نامعتبر است.")
                             s.add(Assignment(subject_id=sub.id,title=p[2],body=p[3],due_at=due,created_by=u.id)); await s.commit(); await create_announcement(context.bot,"تکلیف جدید: "+p[2],p[3],sub.class_id,"announcement",None,u.id); await reply_long(update.message, "✅ تکلیف ثبت شد و اطلاع‌رسانی شد.")
                         elif p[0]=="ویرایش" and len(p)>=6:
                             a=await s.get(Assignment,int(p[1])); sub=await get_subject_by_name(s,p[2])
@@ -1816,10 +1822,12 @@ async def process_state(update, context, u):
                     if p[0]=="افزودن" and len(p)==5:
                         c0=await get_class_by_name(s,p[1]); sub=await get_subject_by_name(s,p[2])
                         if not c0 or not sub: raise ValueError("کلاس یا درس پیدا نشد.")
+                        if sub.class_id != c0.id: raise ValueError("این درس متعلق به کلاس انتخاب‌شده نیست.")
                         s.add(Schedule(class_id=c0.id,subject_id=sub.id,weekday=p[3],period=p[4])); await s.commit(); await create_announcement(context.bot,"تغییر برنامه هفتگی",f"{sub.name} - {p[3]} - {p[4]}",c0.id,"announcement",None,u.id); await reply_long(update.message, "✅ برنامه ثبت شد و اطلاع‌رسانی شد.")
                     elif p[0]=="ویرایش" and len(p)==6:
                         sch=await s.get(Schedule,int(p[1])); c0=await get_class_by_name(s,p[2]); sub=await get_subject_by_name(s,p[3])
                         if not sch or not c0 or not sub: raise ValueError("برنامه، کلاس یا درس پیدا نشد.")
+                        if sub.class_id != c0.id: raise ValueError("این درس متعلق به کلاس انتخاب‌شده نیست.")
                         sch.class_id,sch.subject_id,sch.weekday,sch.period=c0.id,sub.id,p[4],p[5]; await s.commit(); await reply_long(update.message, "✅ برنامه ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         sch=await s.get(Schedule,int(p[1]))
