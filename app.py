@@ -172,6 +172,7 @@ class Note(Base):
     file_id: Mapped[str] = mapped_column(String(300))
     file_name: Mapped[str] = mapped_column(String(255), default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class Announcement(Base):
@@ -1038,17 +1039,51 @@ async def show_admin(update, context, u):
         await reply_long(update.message, "پنل مدیریت آماده است.", reply_markup=keyboard(ADMIN_MENU))
 
 
-def parse_dt(value: str) -> datetime | None:
-    value = (value or "").strip()
-    if not value:
-        return None
-    # Accept Persian/Arabic-Indic digits as well as Latin digits.
-    value = value.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
-    try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M").replace(tzinfo=TZ).astimezone(timezone.utc)
-    except ValueError:
-        return None
+def gregorian_to_jalali(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
+    gdm = [0,31,59,90,120,151,181,212,243,273,304,334]
+    gy2 = gy + 1 if gm > 2 else gy
+    days = 355666 + 365*gy + (gy2+3)//4 - (gy2+99)//100 + (gy2+399)//400 + gd + gdm[gm-1]
+    jy = -1595 + 33*(days//12053); days %= 12053
+    jy += 4*(days//1461); days %= 1461
+    if days > 365: jy += (days-1)//365; days = (days-1)%365
+    jm = 1 + days//31 if days < 186 else 7 + (days-186)//30
+    jd = 1 + (days%31 if days < 186 else (days-186)%30)
+    return jy,jm,jd
 
+def jalali_to_gregorian(jy: int, jm: int, jd: int) -> tuple[int, int, int]:
+    jy += 1595
+    days = -355668 + 365*jy + (jy//33)*8 + ((jy%33+3)//4) + jd
+    days += (jm-1)*31 if jm <= 6 else 186 + (jm-7)*30
+    gy = 400*(days//146097); days %= 146097
+    if days > 36524:
+        gy += 100*((days-1)//36524); days = (days-1)%36524
+        if days >= 365: days += 1
+    gy += 4*(days//1461); days %= 1461
+    if days > 365: gy += (days-1)//365; days = (days-1)%365
+    gd = days+1
+    import calendar
+    gm = 1
+    while gd > calendar.monthrange(gy,gm)[1]:
+        gd -= calendar.monthrange(gy,gm)[1]; gm += 1
+    return gy,gm,gd
+
+def format_jalali_dt(value: datetime | None, with_time: bool = True) -> str:
+    if value is None: return 'نامشخص'
+    local = value.astimezone(TZ)
+    jy,jm,jd = gregorian_to_jalali(local.year,local.month,local.day)
+    result = f'{jy:04d}/{jm:02d}/{jd:02d}'
+    return f'{result} {local:%H:%M}' if with_time else result
+
+def parse_dt(value: str) -> datetime | None:
+    value = (value or '').strip().translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩','01234567890123456789'))
+    import re
+    m = re.fullmatch(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})[ T](\d{1,2}):(\d{2})',value)
+    if not m: return None
+    y,mo,d,hh,mi = map(int,m.groups())
+    try:
+        gy,gm,gd = jalali_to_gregorian(y,mo,d) if y >= 1300 else (y,mo,d)
+        return datetime(gy,gm,gd,hh,mi,tzinfo=TZ).astimezone(timezone.utc)
+    except (ValueError,OverflowError): return None
 
 async def get_class_by_name(s, name):
     return (await s.execute(select(ClassRoom).where(ClassRoom.name == name.strip()))).scalar_one_or_none()
@@ -2178,6 +2213,7 @@ async def init_db():
             # Existing schedule rows may contain a full multi-line weekly plan.
             # Widen the column without deleting or truncating existing data.
             await conn.execute(text("ALTER TABLE schedules ALTER COLUMN period TYPE TEXT USING period::text"))
+            await conn.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"))
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS login_username VARCHAR(100)"))
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(300)"))
             await conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS school_code VARCHAR(80) DEFAULT ''"))
