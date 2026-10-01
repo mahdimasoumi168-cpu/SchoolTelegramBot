@@ -903,7 +903,7 @@ async def show_assigner(update, context, u):
             else:
                 await reply_panel_text(update.message, "\n".join(f"#{x.id} — {u2.name}\n{x.text}" for x, u2 in data), u)
             context.user_data["state"] = "assigner_answer"
-            await reply_long(update.message, "برای پاسخ، ابتدا شماره سؤال را در یک پیام و سپس متن پاسخ را در پیام بعدی ارسال کنید.")
+            await reply_long(update.message, "برای پاسخ به سؤال، ابتدا «پاسخ» را ارسال کنید؛ سپس شماره سؤال و در پیام بعدی متن پاسخ را بفرستید. برای لغو «انصراف» را ارسال کنید.")
     elif t == "🔔 اطلاعیه فردا":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
