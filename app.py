@@ -160,7 +160,7 @@ class Schedule(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"))
     weekday: Mapped[str] = mapped_column(String(20))
-    period: Mapped[str] = mapped_column(String(50))
+    period: Mapped[str] = mapped_column(Text, default="")
     subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"))
 
 
@@ -2173,6 +2173,9 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         if engine.dialect.name == "postgresql":
             await conn.execute(text("ALTER TABLE users ALTER COLUMN telegram_id DROP NOT NULL"))
+            # Existing schedule rows may contain a full multi-line weekly plan.
+            # Widen the column without deleting or truncating existing data.
+            await conn.execute(text("ALTER TABLE schedules ALTER COLUMN period TYPE TEXT USING period::text"))
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS login_username VARCHAR(100)"))
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(300)"))
             await conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS school_code VARCHAR(80) DEFAULT ''"))
