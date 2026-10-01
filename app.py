@@ -1936,16 +1936,6 @@ async def process_state(update, context, u):
         await reply_long(update.message, "عملیات نامعتبر است.")
         return True
 
-    if u.role == "ADMIN" and state == "admin_note_title":
-        meta = [x.strip() for x in text.split("|", 1)]
-        if len(meta) != 2:
-            await reply_long(update.message, "فرمت درست: نام درس|عنوان")
-            return True
-        context.user_data["note_meta"] = meta
-        context.user_data["state"] = "admin_note_file"
-        await reply_long(update.message, "حالا فایل جزوه را ارسال کنید.")
-        return True
-
     # Determiner CRUD wizard: every field is collected in its own Telegram message.
     # Legacy pipe-separated commands remain supported for compatibility.
     assigner_wizard_specs = {
@@ -2007,7 +1997,29 @@ async def process_state(update, context, u):
                 context.user_data["state"] = "assigner_note_file"
                 await reply_long(update.message, "حالا فایل PDF جزوه را ارسال کنید. جزوه‌های قبلی حذف نمی‌شوند و این جزوه اضافه می‌شود.")
                 return True
-            text = "حذف|" + vals[0]
+            if action == "حذف":
+                try:
+                    note_id = int(vals[0])
+                except (ValueError, IndexError):
+                    await reply_long(update.message, "شناسه جزوه معتبر نیست.")
+                    context.user_data.clear()
+                    return True
+                async with SessionLocal() as note_session:
+                    note = await note_session.get(Note, note_id)
+                    if not note:
+                        await reply_long(update.message, "جزوه پیدا نشد.")
+                        context.user_data.clear()
+                        return True
+                    allowed = await allowed_subjects(note_session, u)
+                    if note.subject_id not in {item.id for item in allowed}:
+                        await reply_long(update.message, "به حذف این جزوه دسترسی ندارید.")
+                        context.user_data.clear()
+                        return True
+                    await note_session.delete(note)
+                    await note_session.commit()
+                context.user_data.clear()
+                await reply_long(update.message, "✅ جزوه حذف شد.", reply_markup=keyboard(ASSIGNER_MENU))
+                return True
 
     if u.role == "ASSIGNER":
         try:
