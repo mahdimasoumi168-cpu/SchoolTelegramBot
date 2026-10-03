@@ -104,6 +104,15 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class UserTelegramAccount(Base):
+    __tablename__ = "user_telegram_accounts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    __table_args__ = (UniqueConstraint("user_id", "telegram_id", name="uq_user_telegram_account"),)
+
+
 class ClassRoom(Base):
     __tablename__ = "classes"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -344,25 +353,37 @@ ROLE_NAMES = {"STUDENT": "دانش‌آموز", "ASSIGNER": "تعیین‌کنن
 
 
 async def bind_telegram_account(session, account, telegram_id: int):
-    """Safely bind Telegram and release a stale/non-admin binding from another account."""
-    locked = await session.scalar(
-        select(User).where(User.id == account.id).with_for_update()
-    )
+    """Allow one school account to be used from multiple Telegram accounts."""
+    locked = await session.scalar(select(User).where(User.id == account.id).with_for_update())
     if locked is None:
         raise ValueError("حساب کاربری پیدا نشد.")
-    if locked.telegram_id is not None and locked.telegram_id != telegram_id:
-        raise ValueError("این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
 
     owner = await session.scalar(
+        select(UserTelegramAccount).where(UserTelegramAccount.telegram_id == telegram_id).with_for_update()
+    )
+    if owner is not None and owner.user_id != locked.id:
+        raise ValueError("این حساب تلگرام قبلاً برای یک حساب کاربری دیگر ثبت شده است.")
+
+    legacy_owner = await session.scalar(
         select(User).where(User.telegram_id == telegram_id).with_for_update()
     )
-    if owner is not None and owner.id != locked.id:
-        if owner.role == "ADMIN":
-            raise ValueError("این حساب تلگرام به حساب مدیریت اصلی متصل است و قابل جابه‌جایی نیست.")
-        owner.telegram_id = None
+    if legacy_owner is not None and legacy_owner.id != locked.id:
+        raise ValueError("این حساب تلگرام قبلاً برای یک حساب کاربری دیگر ثبت شده است.")
 
-    locked.telegram_id = telegram_id
+    link = await session.scalar(
+        select(UserTelegramAccount).where(
+            UserTelegramAccount.user_id == locked.id,
+            UserTelegramAccount.telegram_id == telegram_id,
+        )
+    )
+    if link is None:
+        session.add(UserTelegramAccount(user_id=locked.id, telegram_id=telegram_id))
+
+    # Keep the legacy field populated for compatibility with existing data/code.
+    if locked.telegram_id is None:
+        locked.telegram_id = telegram_id
     return locked
+
 
 
 def norm_name(value: str) -> str:
@@ -523,6 +544,14 @@ def callback_update(query, text):
 
 async def db_user(tg_id: int) -> User | None:
     async with SessionLocal() as s:
+        linked = (await s.execute(
+            select(User)
+            .join(UserTelegramAccount, UserTelegramAccount.user_id == User.id)
+            .where(UserTelegramAccount.telegram_id == tg_id)
+        )).scalar_one_or_none()
+        if linked is not None:
+            return linked
+        # Backward compatibility for users created before multi-account login.
         return (await s.execute(select(User).where(User.telegram_id == tg_id))).scalar_one_or_none()
 
 
@@ -1028,23 +1057,32 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tg_id = update.effective_user.id
     async with SessionLocal() as s:
-        u = (await s.execute(select(User).where(User.telegram_id == update.effective_user.id))).scalar_one_or_none()
+        u = await db_user(tg_id)
         if u:
-            # "active" is an account permission controlled by management, not
-            # a login-session flag. Logout only releases the Telegram binding.
-            # Keep the admin binding because ADMIN_TELEGRAM_ID is canonical.
-            if u.role != "ADMIN":
-                u.telegram_id = None
+            await s.execute(delete(UserTelegramAccount).where(
+                UserTelegramAccount.user_id == u.id,
+                UserTelegramAccount.telegram_id == tg_id,
+            ))
+            # Legacy single-binding field is cleared only when this was its binding.
+            if u.telegram_id == tg_id:
+                replacement = await s.scalar(
+                    select(UserTelegramAccount.telegram_id)
+                    .where(UserTelegramAccount.user_id == u.id)
+                    .order_by(UserTelegramAccount.id)
+                )
+                u.telegram_id = replacement
             await s.commit()
     context.user_data.clear()
     await reply_long(
         update.message,
-        "با موفقیت خارج شدید. برای ورود دوباره دکمه زیر را بزنید:",
+        "با موفقیت از این حساب خارج شدید. حساب‌های تلگرامی دیگر شما همچنان متصل می‌مانند. برای ورود دوباره دکمه زیر را بزنید:",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("🔄 شروع مجدد / ورود دوباره", callback_data="menu:__RESTART__", style="success")
         ]]),
     )
+
 
 
 async def show_student(update, u, context=None):
