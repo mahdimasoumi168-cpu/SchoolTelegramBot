@@ -3532,7 +3532,7 @@ async def init_db():
             # remove only that single-column unique index/constraint and keep the
             # composite (user_id, telegram_id) uniqueness.
             await conn.execute(text("""
-                DO $\
+                DO $
                 DECLARE r RECORD;
                 BEGIN
                     FOR r IN
@@ -3544,7 +3544,7 @@ async def init_db():
                     LOOP
                         EXECUTE format('DROP INDEX IF EXISTS %I', r.indexname);
                     END LOOP;
-                END $\;
+                END $;
             """))
             await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_user_telegram_accounts_telegram_id ON user_telegram_accounts (telegram_id)"))
             await conn.execute(text("""
