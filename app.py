@@ -519,6 +519,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = await db_user(tg.id)
     if u and u.active and u.role in ("STUDENT", "ASSIGNER"):
         await panel(update, f"سلام {u.name} 👋\nنقش شما: {ROLE_NAMES[u.role]}")
+        if u.role == "STUDENT":
+            await send_student_entry_digest(context.bot, u)
+        else:
+            await send_assigner_entry_alert(context.bot, u, update.effective_chat.id)
         return
     context.user_data["state"] = "auth_choice"
     await reply_long(update.message, 
@@ -718,7 +722,15 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_student(update, u, context=None):
-    if update.message.text == "📚 درس‌های من":
+    t = update.message.text
+    if t == "👨‍🎓 پنل دانش‌آموز":
+        await send_student_entry_digest(context.bot, u)
+        await reply_panel_text(update.message, "👨‍🎓 پنل دانش‌آموز آماده است. از گزینه‌های زیر استفاده کنید.", u)
+    elif t == "📸 ارسال تکالیف ریاضی سالمی":
+        context.user_data["state"] = "student_math_wait_photo"
+        context.user_data["math_submission_photos"] = []
+        await reply_long(update.message, "📸 ارسال تکالیف ریاضی سالمی\n\nلطفاً عکس واضح تکلیف خود را ارسال کنید. بعد از هر عکس می‌توانید عکس دیگری اضافه کنید یا ثبت نهایی را بزنید.", reply_markup=navigation_markup())
+    elif t == "📚 درس‌های من":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
             if not st or not st.class_id:
@@ -1015,7 +1027,12 @@ async def panel_inquiry_text(s, u, menu_text):
 
 async def show_assigner(update, context, u):
     t = update.message.text
-    if t == "👨‍🎓 دانش‌آموزان":
+    if t == "👤 پنل تعیین‌کننده":
+        await send_assigner_entry_alert(context.bot, u, update.effective_chat.id)
+        await reply_panel_text(update.message, "👤 پنل تعیین‌کننده آماده است.", u)
+    elif t == "📥 بررسی تکالیف عکس‌ها":
+        await send_submission_list(update.message, u)
+    elif t == "👨‍🎓 دانش‌آموزان":
         async with SessionLocal() as s:
             access = (await s.execute(select(Access).where(Access.assigner_user_id == u.id))).scalars().all()
             class_ids = {a.class_id for a in access}
@@ -1128,6 +1145,8 @@ async def show_admin(update, context, u):
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_subject"
         await reply_long(update.message, "📚 مدیریت درس‌ها\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
+    elif t == "🔔 تنظیم اعلان‌های دانش‌آموزان":
+        await send_admin_notification_list(update.message)
     elif t == "🔐 مدیریت دسترسی‌ها":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
@@ -1752,6 +1771,36 @@ async def process_state(update, context, u):
         await reply_long(update.message, "📎 لطفاً فایل جزوه را به‌صورت PDF ارسال کنید. برای لغو «انصراف» را بزنید.")
         return True
 
+    if state == "submission_reject_reason":
+        if not u or u.role != "ASSIGNER":
+            context.user_data.clear()
+            await reply_long(update.message, "این مرحله دیگر معتبر نیست.", reply_markup=back_to_panel_markup(u.role if u else "STUDENT"))
+            return True
+        sid = context.user_data.get("submission_reject_id")
+        try:
+            await finalize_submission_review(context.bot, u, int(sid), "REJECTED", text)
+            context.user_data.clear()
+            await reply_long(update.message, f"❌ تکلیف #{sid} رد شد و توضیح برای دانش‌آموز ارسال شد.", reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📥 بررسی تکالیف بعدی", callback_data="submission:list", style="primary")],
+                [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
+            ]))
+        except Exception as e:
+            log.exception("submission rejection with reason failed")
+            context.user_data.clear()
+            await reply_long(update.message, f"❌ {e}", reply_markup=back_to_panel_markup("ASSIGNER"))
+        return True
+
+    if state in ("student_math_wait_photo", "student_math_more"):
+        buttons = []
+        if context.user_data.get("math_submission_photos"):
+            buttons.append([InlineKeyboardButton("✅ ثبت نهایی", callback_data="mathsub:finish", style="success")])
+        buttons.extend([
+            [InlineKeyboardButton("❌ انصراف", callback_data="menu:__CANCEL__", style="danger")],
+            [InlineKeyboardButton("👨‍🎓 بازگشت به پنل دانش‌آموز", callback_data="menu:__BACK_PANEL__", style="primary")],
+        ])
+        await reply_long(update.message, "لطفاً عکس تکلیف را با دکمه ارسال تصویر بفرستید؛ برای ادامه از دکمه‌های زیر استفاده کنید.", reply_markup=InlineKeyboardMarkup(buttons))
+        return True
+
     if state == "auth_student_school_code":
         school_code = text.strip()
         if not school_code:
@@ -1794,6 +1843,7 @@ async def process_state(update, context, u):
         context.user_data.clear()
         await log_action(account.id, "student_login", school_code)
         await panel(update, f"سلام {account.name} 👋\nورود با موفقیت انجام شد.\n🏫 کد مدرسه: {school_code}")
+        await send_student_entry_digest(context.bot, account)
         return True
 
     if state == "auth_assigner_username":
@@ -1829,6 +1879,7 @@ async def process_state(update, context, u):
         context.user_data.clear()
         await log_action(account.id, "assigner_login", username)
         await panel(update, f"سلام {account.name} 👋\nورود با موفقیت انجام شد.")
+        await send_assigner_entry_alert(context.bot, account, update.effective_chat.id)
         return True
 
     if state == "auth_student":
@@ -1907,6 +1958,7 @@ async def process_state(update, context, u):
         context.user_data.clear()
         await log_action(account.id, "assigner_login", username)
         await panel(update, f"سلام {account.name} 👋\nورود با موفقیت انجام شد.")
+        await send_assigner_entry_alert(context.bot, account, update.effective_chat.id)
         return True
 
 
