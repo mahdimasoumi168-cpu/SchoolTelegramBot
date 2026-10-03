@@ -1568,7 +1568,7 @@ async def notify_class(bot, class_id: int | None, text: str, announcement_id: in
     async def send_one(user_id, telegram_id):
         async with semaphore:
             try:
-                await send_long(bot, telegram_id, text)
+                await send_long(bot, telegram_id, text, reply_markup=back_to_panel_markup("STUDENT"))
                 return user_id, "SENT", ""
             except Exception as e:
                 return user_id, "FAILED", str(e)[:1000]
@@ -2664,7 +2664,7 @@ async def process_state(update, context, u):
                         settings=await get_student_notification_settings(s, q.student_user_id)
                         if student and student.telegram_id and settings.responses_enabled:
                             try:
-                                await send_long(context.bot, student.telegram_id, f"💬 پاسخ سؤال #{q.id}:\n{p[2]}")
+                                await send_long(context.bot, student.telegram_id, f"💬 پاسخ سؤال #{q.id}:\n{p[2]}", reply_markup=back_to_panel_markup("STUDENT"))
                                 q.student_notified = True
                                 await s.commit()
                             except Exception:
@@ -2991,7 +2991,7 @@ async def process_state(update, context, u):
                     settings = await get_student_notification_settings(s, q.student_user_id)
                     if student and student.telegram_id and settings.responses_enabled:
                         try:
-                            await send_long(context.bot, student.telegram_id, f"💬 پاسخ سؤال #{qid}:\n{answer}")
+                            await send_long(context.bot, student.telegram_id, f"💬 پاسخ سؤال #{qid}:\n{answer}", reply_markup=back_to_panel_markup("STUDENT"))
                             q.student_notified = True
                             await s.commit()
                         except Exception:
