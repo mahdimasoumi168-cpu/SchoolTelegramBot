@@ -374,7 +374,7 @@ def operation_markup(prompt: str):
     rows = [[item] for item in options]
     rows.append([
         InlineKeyboardButton("❌ انصراف", callback_data="menu:__CANCEL__", style="danger"),
-        InlineKeyboardButton("↩️ بازگشت به پنل", callback_data="menu:__BACK_PANEL__"),
+        InlineKeyboardButton("↩️ بازگشت به پنل", callback_data="menu:__BACK_PANEL__", style="primary"),
     ])
     return InlineKeyboardMarkup(rows)
 
@@ -1117,7 +1117,7 @@ async def advance_wizard_field(update, context, u, flow_key):
             for oid, name in options
         ]
         buttons.append([
-            InlineKeyboardButton("↩️ بازگشت به پنل", callback_data="menu:__BACK_PANEL__"),
+            InlineKeyboardButton("↩️ بازگشت به پنل", callback_data="menu:__BACK_PANEL__", style="primary"),
             InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__", style="success"),
         ])
         await reply_long(update.message, f"لطفاً {label} را از فهرست انتخاب کنید:", reply_markup=InlineKeyboardMarkup(buttons))
@@ -1664,7 +1664,7 @@ def notification_settings_markup(user_id, settings):
             style=style,
         )])
     rows.extend([
-        [InlineKeyboardButton("↩️ بازگشت به فهرست دانش‌آموزان", callback_data="adminnotify:list")],
+        [InlineKeyboardButton("↩️ بازگشت به فهرست دانش‌آموزان", callback_data="adminnotify:list", style="primary")],
         [InlineKeyboardButton("⚙️ بازگشت به پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")],
     ])
     return InlineKeyboardMarkup(rows)
