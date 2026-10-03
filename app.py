@@ -1059,25 +1059,28 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_id = update.effective_user.id
     async with SessionLocal() as s:
-        u = await db_user(tg_id)
+        u = (await s.execute(
+            select(User).join(UserTelegramAccount, UserTelegramAccount.user_id == User.id)
+            .where(UserTelegramAccount.telegram_id == tg_id)
+        )).scalar_one_or_none()
+        if u is None:
+            u = await s.scalar(select(User).where(User.telegram_id == tg_id))
         if u:
             await s.execute(delete(UserTelegramAccount).where(
                 UserTelegramAccount.user_id == u.id,
                 UserTelegramAccount.telegram_id == tg_id,
             ))
-            # Legacy single-binding field is cleared only when this was its binding.
             if u.telegram_id == tg_id:
-                replacement = await s.scalar(
+                u.telegram_id = await s.scalar(
                     select(UserTelegramAccount.telegram_id)
                     .where(UserTelegramAccount.user_id == u.id)
                     .order_by(UserTelegramAccount.id)
                 )
-                u.telegram_id = replacement
             await s.commit()
     context.user_data.clear()
     await reply_long(
         update.message,
-        "با موفقیت از این حساب خارج شدید. حساب‌های تلگرامی دیگر شما همچنان متصل می‌مانند. برای ورود دوباره دکمه زیر را بزنید:",
+        "با موفقیت از این حساب تلگرام خارج شدید. حساب‌های تلگرامی دیگر شما همچنان متصل می‌مانند.",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("🔄 شروع مجدد / ورود دوباره", callback_data="menu:__RESTART__", style="success")
         ]]),
