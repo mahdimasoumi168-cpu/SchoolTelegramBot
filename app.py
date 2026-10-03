@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from sqlalchemy import (
     BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text,
-    UniqueConstraint, select, delete, or_, text
+    UniqueConstraint, select, delete, or_, text, func
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -1634,12 +1634,12 @@ async def finalize_submission_review(bot, reviewer, submission_id: int, status: 
     sent = False
     if should_notify and telegram_id:
         if status == "APPROVED":
-            message_text = f"✅ تکلیف تصویری شما تأیید شد.\\nشماره پیگیری: #{submission_id}"
+            message_text = f"✅ تکلیف تصویری شما تأیید شد.\nشماره پیگیری: #{submission_id}"
         else:
-            message_text = f"❌ تکلیف تصویری شما رد شد.\\nشماره پیگیری: #{submission_id}"
+            message_text = f"❌ تکلیف تصویری شما رد شد.\nشماره پیگیری: #{submission_id}"
             if note:
-                message_text += f"\\nتوضیح تعیین‌کننده: {note}"
-            message_text += "\\nلطفاً اصلاح کنید و دوباره ارسال کنید."
+                message_text += f"\nتوضیح تعیین‌کننده: {note}"
+            message_text += "\nلطفاً اصلاح کنید و دوباره ارسال کنید."
         try:
             await send_long(bot, telegram_id, message_text, reply_markup=back_to_panel_markup("STUDENT"))
             sent = True
@@ -1687,7 +1687,7 @@ async def send_student_entry_digest(bot, student_user):
                     continue
             stamp = format_jalali_dt(item.scheduled_at) if item.kind == "tomorrow" and item.scheduled_at else ""
             digest_lines.append(
-                f"\\n📌 {item.title}" + (f"\\n⏰ زمان: {stamp}" if stamp else "") + f"\\n{item.body}"
+                f"\n📌 {item.title}" + (f"\n⏰ زمان: {stamp}" if stamp else "") + f"\n{item.body}"
             )
             if item.kind == "announcement":
                 selected_announcements.append(item.id)
@@ -1702,8 +1702,8 @@ async def send_student_entry_digest(bot, student_user):
             for item in selected_submissions:
                 label = "تأیید شد" if item.status == "APPROVED" else "رد شد"
                 digest_lines.append(
-                    f"\\n📝 نتیجه تکلیف تصویری #{item.id}: {label}"
-                    + (f"\\nتوضیح: {item.review_note}" if item.review_note else "")
+                    f"\n📝 نتیجه تکلیف تصویری #{item.id}: {label}"
+                    + (f"\nتوضیح: {item.review_note}" if item.review_note else "")
                 )
         should_send = len(digest_lines) > 1
         if not should_send:
@@ -1711,7 +1711,7 @@ async def send_student_entry_digest(bot, student_user):
             await s.commit()
             return
     try:
-        await send_long(bot, student_user.telegram_id, "\\n".join(digest_lines), reply_markup=back_to_panel_markup("STUDENT"))
+        await send_long(bot, student_user.telegram_id, "\n".join(digest_lines), reply_markup=back_to_panel_markup("STUDENT"))
     except Exception:
         log.exception("student entry digest failed for user %s", student_user.id)
         return
