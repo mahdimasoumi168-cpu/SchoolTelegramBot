@@ -3473,17 +3473,29 @@ async def _document_message_locked(update: Update, context: ContextTypes.DEFAULT
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    if context.error:
-        log.error(
-            "Unhandled bot error",
-            exc_info=(type(context.error), context.error, context.error.__traceback__),
-        )
-    else:
-        log.error("Unhandled bot error without exception details")
+    # Keep the user-facing message short, but log enough context to diagnose
+    # the exact button/state that failed instead of hiding the runtime cause.
+    try:
+        if isinstance(update, Update):
+            log.error(
+                "Unhandled bot error: tg_id=%s chat_id=%s text=%r callback=%r state=%r",
+                update.effective_user.id if update.effective_user else None,
+                update.effective_chat.id if update.effective_chat else None,
+                update.effective_message.text if update.effective_message else None,
+                update.callback_query.data if update.callback_query else None,
+                context.user_data.get("state") if context.user_data else None,
+                exc_info=context.error,
+            )
+        elif context.error:
+            log.error("Unhandled bot error", exc_info=context.error)
+        else:
+            log.error("Unhandled bot error without exception details")
+    except Exception:
+        log.exception("Failed to log unhandled bot error")
     if isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text(
-                "❌ خطای غیرمنتظره رخ داد. می‌توانید به پنل برگردید یا کار را از ابتدا شروع کنید.",
+                "❌ مشکلی در اجرای این عملیات پیش آمد. اطلاعات عملیات حفظ نشده؛ لطفاً «بازگشت به پنل» یا «شروع مجدد» را بزنید.",
                 reply_markup=navigation_markup(),
             )
         except Exception:
@@ -3513,6 +3525,34 @@ async def init_db():
             await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_login_username_unique ON users (login_username) WHERE login_username IS NOT NULL"))
             await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_students_school_code ON students (school_code)"))
             await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_students_login_name ON students (login_name)"))
+            # A Telegram account may be used to access multiple school accounts.
+            # Older deployments created a UNIQUE index on user_telegram_accounts.telegram_id;
+            # remove only that single-column unique index/constraint and keep the
+            # composite (user_id, telegram_id) uniqueness.
+            await conn.execute(text("""
+                DO $
+                DECLARE r RECORD;
+                BEGIN
+                    FOR r IN
+                        SELECT indexname
+                        FROM pg_indexes
+                        WHERE schemaname = current_schema()
+                          AND tablename = 'user_telegram_accounts'
+                          AND indexdef ~* 'UNIQUE.*\\(\\s*telegram_id\\s*\\)'
+                    LOOP
+                        EXECUTE format('DROP INDEX IF EXISTS %I', r.indexname);
+                    END LOOP;
+                END $;
+            """))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_user_telegram_accounts_telegram_id ON user_telegram_accounts (telegram_id)"))
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS active_telegram_sessions (
+                    telegram_id BIGINT PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_active_telegram_sessions_user_id ON active_telegram_sessions (user_id)"))
     if ADMIN_TELEGRAM_ID:
         async with SessionLocal() as s:
             tid = int(ADMIN_TELEGRAM_ID)
