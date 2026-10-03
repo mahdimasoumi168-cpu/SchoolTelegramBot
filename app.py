@@ -108,9 +108,16 @@ class UserTelegramAccount(Base):
     __tablename__ = "user_telegram_accounts"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     __table_args__ = (UniqueConstraint("user_id", "telegram_id", name="uq_user_telegram_account"),)
+
+
+class ActiveTelegramSession(Base):
+    __tablename__ = "active_telegram_sessions"
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class ClassRoom(Base):
@@ -274,6 +281,7 @@ STUDENT_MENU = [
     ["❓ سؤال", "👤 حساب کاربری"],
     ["📖 جزوات", "🔔 اطلاعیه فردا"],
     ["📸 ارسال تکالیف ریاضی سالمی"],
+    ["🔄 تغییر حساب"],
     ["🚪 خروج"],
 ]
 STUDENT_PERMISSION_FIELDS = {
@@ -359,17 +367,8 @@ async def bind_telegram_account(session, account, telegram_id: int):
     if locked is None:
         raise ValueError("حساب کاربری پیدا نشد.")
 
-    owner = await session.scalar(
-        select(UserTelegramAccount).where(UserTelegramAccount.telegram_id == telegram_id).with_for_update()
-    )
-    if owner is not None and owner.user_id != locked.id:
-        raise ValueError("این حساب تلگرام قبلاً برای یک حساب کاربری دیگر ثبت شده است.")
-
-    legacy_owner = await session.scalar(
-        select(User).where(User.telegram_id == telegram_id).with_for_update()
-    )
-    if legacy_owner is not None and legacy_owner.id != locked.id:
-        raise ValueError("این حساب تلگرام قبلاً برای یک حساب کاربری دیگر ثبت شده است.")
+    # یک Telegram می‌تواند به چند حساب مدرسه متصل باشد؛ فقط حساب فعال در
+    # active_telegram_sessions مشخص می‌شود. بنابراین دیگر اتصال قبلی مانع ورود نیست.
 
     link = await session.scalar(
         select(UserTelegramAccount).where(
@@ -382,7 +381,10 @@ async def bind_telegram_account(session, account, telegram_id: int):
 
     # Keep the legacy field populated for compatibility with existing data/code.
     if locked.telegram_id is None:
-        locked.telegram_id = telegram_id
+        legacy_owner = await session.scalar(select(User).where(User.telegram_id == telegram_id).with_for_update())
+        if legacy_owner is None:
+            locked.telegram_id = telegram_id
+    await set_active_account(session, telegram_id, locked.id)
     return locked
 
 
@@ -545,15 +547,29 @@ def callback_update(query, text):
 
 async def db_user(tg_id: int) -> User | None:
     async with SessionLocal() as s:
-        linked = (await s.execute(
-            select(User)
-            .join(UserTelegramAccount, UserTelegramAccount.user_id == User.id)
-            .where(UserTelegramAccount.telegram_id == tg_id)
-        )).scalar_one_or_none()
-        if linked is not None:
-            return linked
+        active = await s.scalar(select(ActiveTelegramSession).where(ActiveTelegramSession.telegram_id == tg_id))
+        if active is not None:
+            user = await s.get(User, active.user_id)
+            if user is not None:
+                return user
+            await s.delete(active)
+            await s.commit()
         # Backward compatibility for users created before multi-account login.
-        return (await s.execute(select(User).where(User.telegram_id == tg_id))).scalar_one_or_none()
+        return await s.scalar(select(User).where(User.telegram_id == tg_id))
+
+
+async def set_active_account(session, telegram_id: int, user_id: int):
+    active = await session.get(ActiveTelegramSession, telegram_id)
+    if active is None:
+        session.add(ActiveTelegramSession(telegram_id=telegram_id, user_id=user_id))
+    else:
+        active.user_id = user_id
+        active.updated_at = datetime.now(timezone.utc)
+    await session.flush()
+
+
+async def clear_active_account(session, telegram_id: int):
+    await session.execute(delete(ActiveTelegramSession).where(ActiveTelegramSession.telegram_id == telegram_id))
 
 
 async def ensure_user(tg_id: int, name: str) -> User | None:
@@ -1020,6 +1036,13 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             await reply_long(query.message, "❌ عملیات لغو شد.\n👨‍🎓 پنل دانش‌آموز", reply_markup=await student_menu_markup(u.id))
         return
+    if text == "🔄 تغییر حساب":
+        context.user_data.clear()
+        async with SessionLocal() as s:
+            await clear_active_account(s, query.from_user.id)
+            await s.commit()
+        await reply_long(query.message, "🔄 حساب فعلی بسته شد. حالا می‌توانید با هر حساب مدرسه دیگری وارد شوید.", reply_markup=auth_choice_markup())
+        return
     if text == "__BACK_PANEL__":
         context.user_data.clear()
         u = await db_user(query.from_user.id)
@@ -1032,7 +1055,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         elif u.role == "ASSIGNER":
             await reply_long(query.message, "👤 پنل تعیین‌کننده", reply_markup=keyboard(ASSIGNER_MENU))
         elif u.role == "STUDENT":
-            await reply_long(query.message, "👨‍🎓 پنل دانش‌آموز", reply_markup=keyboard(STUDENT_MENU))
+            await reply_long(query.message, "👨‍🎓 پنل دانش‌آموز", reply_markup=await student_menu_markup(u.id))
         return
     u = await db_user(query.from_user.id)
     if not u or not u.active or u.role == "PENDING":
@@ -1060,28 +1083,12 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_id = update.effective_user.id
     async with SessionLocal() as s:
-        u = (await s.execute(
-            select(User).join(UserTelegramAccount, UserTelegramAccount.user_id == User.id)
-            .where(UserTelegramAccount.telegram_id == tg_id)
-        )).scalar_one_or_none()
-        if u is None:
-            u = await s.scalar(select(User).where(User.telegram_id == tg_id))
-        if u:
-            await s.execute(delete(UserTelegramAccount).where(
-                UserTelegramAccount.user_id == u.id,
-                UserTelegramAccount.telegram_id == tg_id,
-            ))
-            if u.telegram_id == tg_id:
-                u.telegram_id = await s.scalar(
-                    select(UserTelegramAccount.telegram_id)
-                    .where(UserTelegramAccount.user_id == u.id)
-                    .order_by(UserTelegramAccount.id)
-                )
-            await s.commit()
+        await clear_active_account(s, tg_id)
+        await s.commit()
     context.user_data.clear()
     await reply_long(
         update.message,
-        "با موفقیت از این حساب تلگرام خارج شدید. حساب‌های تلگرامی دیگر شما همچنان متصل می‌مانند.",
+        "✅ از حساب فعلی خارج شدید. می‌توانید با «شروع مجدد» هر حساب مدرسه دیگری را انتخاب کنید.",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("🔄 شروع مجدد / ورود دوباره", callback_data="menu:__RESTART__", style="success")
         ]]),
