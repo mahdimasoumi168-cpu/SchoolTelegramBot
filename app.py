@@ -617,6 +617,185 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                 await reply_long(query.message, f"⚠️ ارسال جزوه #{n.id} ناموفق بود.")
         await reply_long(query.message, "پایان جزوه‌های این تاریخ.", reply_markup=back_to_panel_markup("STUDENT"))
         return
+    if data.startswith("mathsub:"):
+        action = data.split(":", 1)[1]
+        u = await db_user(query.from_user.id)
+        if not u or not u.active or u.role != "STUDENT":
+            await reply_long(query.message, "برای این عملیات باید با حساب دانش‌آموز وارد شوید.")
+            return
+        if action == "more":
+            if context.user_data.get("state") != "student_math_more":
+                await reply_long(query.message, "این مرحله معتبر نیست؛ ارسال تکلیف را دوباره آغاز کنید.")
+                return
+            context.user_data["state"] = "student_math_wait_photo"
+            await reply_long(query.message, "📸 عکس بعدی را ارسال کنید. حداکثر ۱۰ عکس برای هر ارسال پذیرفته می‌شود.", reply_markup=navigation_markup())
+            return
+        if action == "finish":
+            photos = context.user_data.get("math_submission_photos", [])
+            if not photos:
+                await reply_long(query.message, "هنوز عکسی دریافت نشده است. ابتدا عکس تکلیف را ارسال کنید.", reply_markup=navigation_markup())
+                return
+            async with SessionLocal() as s:
+                student = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
+                if not student or not student.class_id:
+                    await reply_long(query.message, "کلاس شما مشخص نیست؛ با مدیریت مدرسه تماس بگیرید.", reply_markup=back_to_panel_markup("STUDENT"))
+                    context.user_data.clear()
+                    return
+                class_id = student.class_id
+                item = HomeworkSubmission(student_user_id=u.id, class_id=class_id, photos=json.dumps(photos, ensure_ascii=False), status="PENDING")
+                s.add(item)
+                await s.commit()
+                await s.refresh(item)
+                submission_id = item.id
+            context.user_data.clear()
+            await notify_assigners_submission(context.bot, submission_id, class_id, u.name or "دانش‌آموز")
+            await reply_long(query.message, f"✅ تکلیف تصویری شما با موفقیت ثبت شد.\nشماره پیگیری: #{submission_id}\nپس از بررسی، نتیجه برایتان ارسال می‌شود.", reply_markup=back_to_panel_markup("STUDENT"))
+            return
+        return
+
+    if data.startswith("submission:"):
+        parts = data.split(":")
+        u = await db_user(query.from_user.id)
+        if not u or not u.active or u.role != "ASSIGNER":
+            await reply_long(query.message, "فقط تعیین‌کننده فعال می‌تواند تکالیف را بررسی کند.")
+            return
+        action = parts[1] if len(parts) > 1 else ""
+        if action == "list":
+            await send_submission_list(query.message, u)
+            return
+        if action == "view" and len(parts) == 3:
+            try:
+                submission_id = int(parts[2])
+            except ValueError:
+                await reply_long(query.message, "شناسه تکلیف نامعتبر است.")
+                return
+            async with SessionLocal() as s:
+                item = await s.get(HomeworkSubmission, submission_id)
+                allowed = None
+                if item:
+                    allowed = await s.scalar(select(Access.id).where(
+                        Access.assigner_user_id == u.id,
+                        Access.class_id == item.class_id,
+                    ).limit(1))
+                if not item or not allowed:
+                    await reply_long(query.message, "این تکلیف پیدا نشد یا به آن دسترسی ندارید.", reply_markup=back_to_panel_markup("ASSIGNER"))
+                    return
+                student = await s.get(User, item.student_user_id)
+                st = (await s.execute(select(Student).where(Student.user_id == item.student_user_id))).scalar_one_or_none()
+                cls = await s.get(ClassRoom, item.class_id)
+                photo_ids = json.loads(item.photos or "[]")
+                details = (
+                    f"📥 بررسی تکلیف تصویری #{item.id}\n"
+                    f"👤 دانش‌آموز: {student.name if student else 'نامشخص'}\n"
+                    f"🏫 کلاس: {cls.name if cls else 'نامشخص'}\n"
+                    f"🆔 کد مدرسه: {st.school_code if st else '---'}\n"
+                    f"📅 زمان ارسال: {format_jalali_dt(item.created_at)}\n"
+                    f"📷 تعداد عکس‌ها: {len(photo_ids)}"
+                )
+            for index, photo_id in enumerate(photo_ids):
+                try:
+                    await query.message.reply_photo(photo=photo_id, caption=details if index == 0 else f"تصویر {index + 1} از {len(photo_ids)}")
+                except Exception:
+                    log.exception("failed to show submission photo %s", submission_id)
+                    await reply_long(query.message, f"⚠️ نمایش یکی از عکس‌های تکلیف #{submission_id} ناموفق بود.")
+            await reply_long(query.message, "نتیجه بررسی را انتخاب کنید:", reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ تأیید تکلیف", callback_data=f"submission:approve:{submission_id}", style="success")],
+                [InlineKeyboardButton("❌ رد تکلیف", callback_data=f"submission:reject:{submission_id}", style="danger")],
+                [InlineKeyboardButton("↩️ بازگشت به فهرست", callback_data="submission:list", style="primary")],
+                [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
+            ]))
+            return
+        if action == "approve" and len(parts) == 3:
+            try:
+                sid = int(parts[2])
+                await finalize_submission_review(context.bot, u, sid, "APPROVED")
+                await reply_long(query.message, f"✅ تکلیف #{sid} تأیید شد.", reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📥 بررسی تکالیف بعدی", callback_data="submission:list", style="primary")],
+                    [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
+                ]))
+            except Exception as e:
+                log.exception("submission approval failed")
+                await reply_long(query.message, f"❌ {e}", reply_markup=back_to_panel_markup("ASSIGNER"))
+            return
+        if action == "reject" and len(parts) == 3:
+            try:
+                sid = int(parts[2])
+                async with SessionLocal() as s:
+                    item = await s.get(HomeworkSubmission, sid)
+                    allowed = None
+                    if item:
+                        allowed = await s.scalar(select(Access.id).where(
+                            Access.assigner_user_id == u.id,
+                            Access.class_id == item.class_id,
+                        ).limit(1))
+                    if not item or item.status != "PENDING" or not allowed:
+                        raise ValueError("این تکلیف پیدا نشد، قبلاً بررسی شده یا دسترسی ندارید.")
+                context.user_data.clear()
+                context.user_data["state"] = "submission_reject_reason"
+                context.user_data["submission_reject_id"] = sid
+                await reply_long(query.message, f"علت رد تکلیف #{sid} را بنویسید تا برای دانش‌آموز ارسال شود:", reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("رد بدون توضیح", callback_data=f"submission:reject_plain:{sid}", style="danger")],
+                    [InlineKeyboardButton("↩️ بازگشت به فهرست", callback_data="submission:list", style="primary")],
+                    [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
+                ]))
+            except Exception as e:
+                await reply_long(query.message, f"❌ {e}", reply_markup=back_to_panel_markup("ASSIGNER"))
+            return
+        if action == "reject_plain" and len(parts) == 3:
+            try:
+                sid = int(parts[2])
+                await finalize_submission_review(context.bot, u, sid, "REJECTED", "نیاز به اصلاح دارد.")
+                context.user_data.clear()
+                await reply_long(query.message, f"❌ تکلیف #{sid} رد شد و نتیجه برای دانش‌آموز ارسال شد.", reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📥 بررسی تکالیف بعدی", callback_data="submission:list", style="primary")],
+                    [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
+                ]))
+            except Exception as e:
+                log.exception("submission rejection failed")
+                await reply_long(query.message, f"❌ {e}", reply_markup=back_to_panel_markup("ASSIGNER"))
+            return
+        return
+
+    if data.startswith("adminnotify:"):
+        parts = data.split(":")
+        u = await db_user(query.from_user.id)
+        if not u or not u.active or u.role != "ADMIN":
+            await reply_long(query.message, "فقط مدیریت می‌تواند تنظیم اعلان‌ها را تغییر دهد.")
+            return
+        action = parts[1] if len(parts) > 1 else ""
+        if action == "list":
+            await render_admin_notification_list(query)
+            return
+        if action == "student" and len(parts) == 3:
+            try:
+                target_id = int(parts[2])
+            except ValueError:
+                await reply_long(query.message, "شناسه دانش‌آموز نامعتبر است.")
+                return
+            await render_admin_notification_settings(query, target_id)
+            return
+        if action == "toggle" and len(parts) == 4:
+            try:
+                target_id = int(parts[2])
+            except ValueError:
+                await reply_long(query.message, "شناسه دانش‌آموز نامعتبر است.")
+                return
+            key = parts[3]
+            if key not in NOTIFICATION_LABELS:
+                await reply_long(query.message, "نوع اعلان نامعتبر است.")
+                return
+            async with SessionLocal() as s:
+                target = await s.get(User, target_id)
+                if not target or target.role != "STUDENT":
+                    await reply_long(query.message, "دانش‌آموز پیدا نشد.")
+                    return
+                settings = await get_student_notification_settings(s, target_id)
+                setattr(settings, key, not bool(getattr(settings, key)))
+                await s.commit()
+            await render_admin_notification_settings(query, target_id)
+            return
+        return
+
     if data.startswith("action:"):
         action = data.split(":", 1)[1]
         allowed_actions = {"افزودن", "ویرایش", "حذف", "نمایش", "پاسخ", "فعال", "غیرفعال", "تغییر نقش"}
@@ -2779,6 +2958,32 @@ async def _message_locked(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply_long(update.message, "نقش شما هنوز تأیید نشده است.")
 
 
+
+
+async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user:
+        return
+    u = await db_user(update.effective_user.id)
+    state = context.user_data.get("state")
+    if not u or not u.active or u.role != "STUDENT" or state not in ("student_math_wait_photo", "student_math_more"):
+        return
+    photos = context.user_data.setdefault("math_submission_photos", [])
+    if len(photos) >= 10:
+        await reply_long(update.message, "حداکثر ۱۰ عکس برای هر ارسال پذیرفته می‌شود. حالا ثبت نهایی را بزنید.", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ ثبت نهایی", callback_data="mathsub:finish", style="success")],
+            [InlineKeyboardButton("❌ انصراف", callback_data="menu:__CANCEL__", style="danger")],
+        ]))
+        return
+    photos.append(update.message.photo[-1].file_id)
+    context.user_data["state"] = "student_math_more"
+    await reply_long(update.message, f"✅ عکس {len(photos)} دریافت شد. عکس دیگری هم دارید؟", reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("📸 افزودن عکس دیگر", callback_data="mathsub:more", style="primary")],
+        [InlineKeyboardButton("✅ ثبت نهایی", callback_data="mathsub:finish", style="success")],
+        [InlineKeyboardButton("❌ انصراف", callback_data="menu:__CANCEL__", style="danger")],
+        [InlineKeyboardButton("👨‍🎓 بازگشت به پنل دانش‌آموز", callback_data="menu:__BACK_PANEL__", style="primary")],
+    ]))
+
+
 async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user:
         async with get_user_lock(update.effective_user.id):
@@ -2886,7 +3091,8 @@ def main():
         .build()
     )
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:|note_date:|action:)"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:|note_date:|action:|mathsub:|submission:|adminnotify:)"))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_message))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
     app.add_error_handler(error_handler)
