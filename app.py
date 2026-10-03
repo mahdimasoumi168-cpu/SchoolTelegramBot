@@ -604,7 +604,13 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 u.telegram_id = None
             await s.commit()
     context.user_data.clear()
-    await reply_long(update.message, "با موفقیت خارج شدید. برای ورود دوباره /start را بزنید.", reply_markup=ReplyKeyboardRemove())
+    await reply_long(
+        update.message,
+        "با موفقیت خارج شدید. برای ورود دوباره دکمه زیر را بزنید:",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 شروع مجدد / ورود دوباره", callback_data="menu:__RESTART__")
+        ]]),
+    )
 
 
 async def show_student(update, u, context=None):
