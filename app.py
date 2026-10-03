@@ -1888,10 +1888,10 @@ async def send_student_entry_digest(bot, student_user):
             field = announcement_notification_field(item)
             if not getattr(settings, field):
                 continue
-            # Scheduled "tomorrow" notices should not be sent before their due time.
-            if item.kind == "tomorrow" and item.scheduled_at and item.scheduled_at > now:
-                continue
-            if item.kind in ("announcement", "tomorrow"):
+            # Upcoming "tomorrow" notices may appear in the entry digest, but
+            # their scheduled delivery must remain intact.
+            due_now = not item.scheduled_at or item.scheduled_at <= now
+            if item.kind == "announcement" or (item.kind == "tomorrow" and due_now):
                 delivery = (await s.execute(select(Delivery).where(
                     Delivery.announcement_id == item.id,
                     Delivery.user_id == student_user.id,
@@ -1902,7 +1902,7 @@ async def send_student_entry_digest(bot, student_user):
             digest_lines.append(
                 f"\n📌 {item.title}" + (f"\n⏰ زمان: {stamp}" if stamp else "") + f"\n{item.body}"
             )
-            if item.kind in ("announcement", "tomorrow"):
+            if item.kind == "announcement" or (item.kind == "tomorrow" and due_now):
                 selected_announcements.append(item.id)
         if settings.responses_enabled:
             selected_submissions = (await s.execute(
