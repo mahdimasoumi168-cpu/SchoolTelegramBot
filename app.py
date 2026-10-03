@@ -3527,25 +3527,10 @@ async def init_db():
             await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_login_username_unique ON users (login_username) WHERE login_username IS NOT NULL"))
             await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_students_school_code ON students (school_code)"))
             await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_students_login_name ON students (login_name)"))
-            # A Telegram account may be used to access multiple school accounts.
-            # Older deployments created a UNIQUE index on user_telegram_accounts.telegram_id;
-            # remove only that single-column unique index/constraint and keep the
-            # composite (user_id, telegram_id) uniqueness.
-            await conn.execute(text("""
-                DO $
-                DECLARE r RECORD;
-                BEGIN
-                    FOR r IN
-                        SELECT indexname
-                        FROM pg_indexes
-                        WHERE schemaname = current_schema()
-                          AND tablename = 'user_telegram_accounts'
-                          AND indexdef ~* 'UNIQUE.*\\(\\s*telegram_id\\s*\\)'
-                    LOOP
-                        EXECUTE format('DROP INDEX IF EXISTS %I', r.indexname);
-                    END LOOP;
-                END $;
-            """))
+            # Older deployments may have a single-column UNIQUE constraint/index on telegram_id.
+            # Remove it; uniqueness is only required for (user_id, telegram_id).
+            await conn.execute(text("ALTER TABLE user_telegram_accounts DROP CONSTRAINT IF EXISTS user_telegram_accounts_telegram_id_key"))
+            await conn.execute(text("DROP INDEX IF EXISTS ix_user_telegram_accounts_telegram_id"))
             await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_user_telegram_accounts_telegram_id ON user_telegram_accounts (telegram_id)"))
             await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS active_telegram_sessions (
