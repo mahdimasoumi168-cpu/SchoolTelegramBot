@@ -301,7 +301,7 @@ STUDENT_PERMISSION_LABELS = list(STUDENT_PERMISSION_FIELDS.keys())
 def student_menu_rows(enabled_fields: set[str]):
     rows = []
     for row in STUDENT_MENU:
-        filtered = [label for label in row if label in ("👨‍🎓 پنل دانش‌آموز", "🚪 خروج") or (label in STUDENT_PERMISSION_FIELDS and STUDENT_PERMISSION_FIELDS[label] in enabled_fields)]
+        filtered = [label for label in row if label in ("👨‍🎓 پنل دانش‌آموز", "🔄 تغییر حساب", "🚪 خروج") or (label in STUDENT_PERMISSION_FIELDS and STUDENT_PERMISSION_FIELDS[label] in enabled_fields)]
         if filtered:
             rows.append(filtered)
     return rows
@@ -337,6 +337,7 @@ ASSIGNER_MENU = [
     ["📝 امتحانات", "📖 جزوات"],
     ["❓ سؤالات", "🔔 اطلاعیه فردا"],
     ["📥 بررسی تکالیف عکس‌ها"],
+    ["🔄 تغییر حساب"],
     ["🚪 خروج"],
 ]
 
@@ -355,6 +356,7 @@ ADMIN_MENU = [
     ["🗄️ مدیریت دیتابیس", "🔒 تنظیمات امنیتی"],
     ["🔔 تنظیم اعلان‌های دانش‌آموزان"],
     ["🎛️ تنظیم دکمه‌های دانش‌آموزان"],
+    ["🔄 تغییر حساب"],
     ["🚪 خروج"],
 ]
 
