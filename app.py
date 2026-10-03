@@ -756,7 +756,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                 sid = int(parts[2])
                 await finalize_submission_review(context.bot, u, sid, "REJECTED", "نیاز به اصلاح دارد.")
                 context.user_data.clear()
-                await reply_long(query.message, f"❌ تکلیف #{sid} رد شد و نتیجه برای دانش‌آموز ارسال شد.", reply_markup=InlineKeyboardMarkup([
+                await reply_long(query.message, f"❌ تکلیف #{sid} رد شد و نتیجه در سامانه ثبت شد.", reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("📥 بررسی تکالیف بعدی", callback_data="submission:list", style="primary")],
                     [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
                 ]))
@@ -2642,7 +2642,7 @@ async def process_state(update, context, u):
                             try: await send_long(context.bot, student.telegram_id,f"💬 پاسخ سؤال #{q.id}:\n{p[2]}")
                             except Exception: log.exception("admin question notification failed")
                         await log_action(u.id,"admin_question_answered",str(q.id))
-                        await reply_long(update.message, "✅ پاسخ سؤال ثبت و برای دانش‌آموز ارسال شد.")
+                        await reply_long(update.message, "✅ پاسخ سؤال ثبت شد.")
                     elif action=="حذف" and len(p)==2:
                         q=await s.get(Question,int(p[1]))
                         if not q: raise ValueError("سؤال پیدا نشد.")
