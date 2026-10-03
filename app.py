@@ -379,6 +379,14 @@ def operation_markup(prompt: str):
     return InlineKeyboardMarkup(rows)
 
 
+def auth_choice_markup():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👨‍🎓 ورود دانش‌آموز", callback_data="auth:student", style="primary")],
+        [InlineKeyboardButton("👤 ورود تعیین‌کننده", callback_data="auth:assigner", style="success")],
+        [InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__", style="success")],
+    ])
+
+
 def back_to_panel_markup(role):
     if role == "ADMIN":
         label = "⚙️ بازگشت به پنل مدیریت"
@@ -840,7 +848,8 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data.clear()
         u = await db_user(query.from_user.id)
         if not u or not u.active:
-            await reply_long(query.message, "حساب شما فعال نیست.")
+            context.user_data["state"] = "auth_choice"
+            await reply_long(query.message, "برای ادامه، نوع حساب را انتخاب کنید:", reply_markup=auth_choice_markup())
             return
         if u.role == "ADMIN":
             await reply_long(query.message, "❌ عملیات لغو شد.\n⚙️ پنل مدیریت", reply_markup=keyboard(ADMIN_MENU))
@@ -853,7 +862,8 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data.clear()
         u = await db_user(query.from_user.id)
         if not u or not u.active:
-            await reply_long(query.message, "حساب شما فعال نیست.")
+            context.user_data["state"] = "auth_choice"
+            await reply_long(query.message, "برای ادامه، نوع حساب را انتخاب کنید:", reply_markup=auth_choice_markup())
             return
         if u.role == "ADMIN":
             await reply_long(query.message, "⚙️ پنل مدیریت", reply_markup=keyboard(ADMIN_MENU))
