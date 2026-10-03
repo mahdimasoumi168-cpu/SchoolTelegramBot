@@ -297,10 +297,54 @@ def verify_password(password: str, stored: str | None) -> bool:
     return secrets.compare_digest(check, digest)
 
 
+def button_style(label: str):
+    """Use Telegram's native, theme-aware button color styles."""
+    value = (label or "").strip()
+    if any(word in value for word in ("حذف", "انصراف", "لغو", "خروج", "غیرفعال")):
+        return "danger"
+    if any(word in value for word in ("افزودن", "ثبت", "ذخیره", "تأیید", "فعال", "ارسال", "ورود")):
+        return "success"
+    if any(word in value for word in ("شروع", "بعدی", "ویرایش", "پاسخ", "نمایش")):
+        return "primary"
+    return None
+
+
+def styled_button(label, callback_data):
+    style = button_style(label)
+    return InlineKeyboardButton(label, callback_data=callback_data, **({"style": style} if style else {}))
+
+
 def keyboard(rows):
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(label, callback_data=f"menu:{label}") for label in row] for row in rows]
+        [[styled_button(label, f"menu:{label}") for label in row] for row in rows]
     )
+
+
+def operation_markup(prompt: str):
+    """Offer clickable operation choices when a workflow asks for an operation."""
+    text = prompt or ""
+    options = []
+    candidates = [
+        ("افزودن", "افزودن", "success"),
+        ("ویرایش", "ویرایش", "primary"),
+        ("حذف", "حذف", "danger"),
+        ("نمایش", "نمایش", "primary"),
+        ("پاسخ", "پاسخ", "primary"),
+        ("فعال", "فعال", "success"),
+        ("غیرفعال", "غیرفعال", "danger"),
+        ("تغییر نقش", "تغییر نقش", "primary"),
+    ]
+    for label, command, style in candidates:
+        if label in text:
+            options.append(InlineKeyboardButton(label, callback_data=f"action:{command}", style=style))
+    if not options:
+        return None
+    rows = [[item] for item in options]
+    rows.append([
+        InlineKeyboardButton("❌ انصراف", callback_data="menu:__CANCEL__", style="danger"),
+        InlineKeyboardButton("↩️ بازگشت به پنل", callback_data="menu:__BACK_PANEL__"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 
 def back_to_panel_markup(role):
@@ -311,15 +355,15 @@ def back_to_panel_markup(role):
     else:
         label = "👨‍🎓 بازگشت به پنل دانش‌آموز"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(label, callback_data="menu:__BACK_PANEL__")],
-        [InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__")],
+        [InlineKeyboardButton(label, callback_data="menu:__BACK_PANEL__", style="primary")],
+        [InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__", style="success")],
     ])
 
 
 def navigation_markup():
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("↩️ بازگشت به پنل", callback_data="menu:__BACK_PANEL__"),
-        InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__"),
+        InlineKeyboardButton("↩️ بازگشت به پنل", callback_data="menu:__BACK_PANEL__", style="primary"),
+        InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__", style="success"),
     ]])
 
 async def reply_panel_text(message, text: str, user):
@@ -327,9 +371,9 @@ async def reply_panel_text(message, text: str, user):
 
 async def reply_long(message, text: str, **kwargs):
     """Send text safely within Telegram's 4096-character message limit."""
-    if kwargs.get("reply_markup") is None:
-        kwargs["reply_markup"] = navigation_markup()
     text = str(text or "")
+    if kwargs.get("reply_markup") is None:
+        kwargs["reply_markup"] = operation_markup(text) or navigation_markup()
     if not text:
         return await message.reply_text("", **kwargs)
     chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)]
@@ -534,6 +578,18 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                 await reply_long(query.message, f"⚠️ ارسال جزوه #{n.id} ناموفق بود.")
         await reply_long(query.message, "پایان جزوه‌های این تاریخ.", reply_markup=back_to_panel_markup("STUDENT"))
         return
+    if data.startswith("action:"):
+        action = data.split(":", 1)[1]
+        allowed_actions = {"افزودن", "ویرایش", "حذف", "نمایش", "پاسخ", "فعال", "غیرفعال", "تغییر نقش"}
+        if action not in allowed_actions:
+            return
+        u = await db_user(query.from_user.id)
+        if not u or not u.active or u.role not in ("ADMIN", "ASSIGNER"):
+            await reply_long(query.message, "حساب شما فعال نیست.")
+            return
+        await process_state(callback_update(query, action), context, u)
+        return
+
     if not data.startswith("menu:"):
         return
     text = data[5:]
@@ -559,6 +615,19 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                     [InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__")],
                 ]),
             )
+        return
+    if text == "__CANCEL__":
+        context.user_data.clear()
+        u = await db_user(query.from_user.id)
+        if not u or not u.active:
+            await reply_long(query.message, "حساب شما فعال نیست.")
+            return
+        if u.role == "ADMIN":
+            await reply_long(query.message, "❌ عملیات لغو شد.\n⚙️ پنل مدیریت", reply_markup=keyboard(ADMIN_MENU))
+        elif u.role == "ASSIGNER":
+            await reply_long(query.message, "❌ عملیات لغو شد.\n👤 پنل تعیین‌کننده", reply_markup=keyboard(ASSIGNER_MENU))
+        else:
+            await reply_long(query.message, "❌ عملیات لغو شد.\n👨‍🎓 پنل دانش‌آموز", reply_markup=keyboard(STUDENT_MENU))
         return
     if text == "__BACK_PANEL__":
         context.user_data.clear()
@@ -2386,7 +2455,7 @@ def main():
         .build()
     )
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:|note_date:)"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:|note_date:|action:)"))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
     app.add_error_handler(error_handler)
