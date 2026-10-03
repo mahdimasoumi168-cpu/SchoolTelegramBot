@@ -669,11 +669,11 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             return
         action = parts[1] if len(parts) > 1 else ""
         if action == "list":
-            if context.user_data.get("state") == "submission_reject_reason":
-                context.user_data.clear()
+            context.user_data.clear()
             await send_submission_list(query.message, u)
             return
         if action == "view" and len(parts) == 3:
+            context.user_data.clear()
             try:
                 submission_id = int(parts[2])
             except ValueError:
