@@ -484,7 +484,7 @@ async def panel(update: Update, text: str = "منوی پنل:"):
     elif u.role == "ASSIGNER":
         await reply_long(update.message, text, reply_markup=keyboard(ASSIGNER_MENU))
     elif u.role == "STUDENT":
-        await reply_long(update.message, text, reply_markup=keyboard(STUDENT_MENU))
+        await reply_long(update.message, text, reply_markup=await student_menu_markup(u.id))
     else:
         await reply_long(update.message, "حساب شما هنوز توسط مدیریت تأیید نشده است.", reply_markup=ReplyKeyboardRemove())
 
@@ -848,7 +848,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             menu_map = {
                 "ADMIN": ("⚙️ پنل مدیریت", ADMIN_MENU),
                 "ASSIGNER": ("👤 پنل تعیین‌کننده", ASSIGNER_MENU),
-                "STUDENT": ("👨‍🎓 پنل دانش‌آموز", STUDENT_MENU),
+                "STUDENT": ("👨‍🎓 پنل دانش‌آموز", student_menu_rows(await get_student_enabled_fields(u.id))),
             }
             title, menu_rows = menu_map[u.role]
             await reply_long(query.message, "🔄 سامانه از ابتدا آماده شد.\n" + title, reply_markup=keyboard(menu_rows))
@@ -900,6 +900,9 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         await logout(callback_update(query, text), context)
         return
     if u.role == "STUDENT" and text == "❓ سؤال":
+        if not await student_permission_allowed(u.id, text):
+            await reply_long(query.message, "⛔ این گزینه برای حساب شما توسط مدیریت غیرفعال شده است.", reply_markup=await student_menu_markup(u.id))
+            return
         context.user_data["state"] = "student_question_text"
         await reply_long(query.message, "❓ سؤال\n\nمتن سؤال را در پیام بعدی ارسال کنید. نیازی به انتخاب درس یا کلاس نیست؛ سامانه اطلاعات حساب شما را خودش در نظر می‌گیرد. برای لغو «انصراف».")
         return
@@ -934,6 +937,9 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_student(update, u, context=None):
     t = update.message.text
+    if t not in ("👨‍🎓 پنل دانش‌آموز", "🚪 خروج") and not await student_permission_allowed(u.id, t):
+        await reply_long(update.message, "⛔ این گزینه برای حساب شما توسط مدیریت غیرفعال شده است.", reply_markup=await student_menu_markup(u.id))
+        return
     if t == "👨‍🎓 پنل دانش‌آموز":
         await send_student_entry_digest(context.bot, u)
         await reply_panel_text(update.message, "👨‍🎓 پنل دانش‌آموز آماده است. از گزینه‌های زیر استفاده کنید.", u)
@@ -1361,6 +1367,8 @@ async def show_admin(update, context, u):
         await reply_long(update.message, "📚 مدیریت درس‌ها\n\nاز دکمه‌های زیر یکی را انتخاب کنید: «افزودن»، «ویرایش» یا «حذف»؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "🔔 تنظیم اعلان‌های دانش‌آموزان":
         await send_admin_notification_list(update.message, 0)
+    elif t == "🎛️ تنظیم دکمه‌های دانش‌آموزان":
+        await render_admin_student_permission_list(update.message, 0)
     elif t == "🔐 مدیریت دسترسی‌ها":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
@@ -2659,7 +2667,9 @@ async def process_state(update, context, u):
                         exists=await s.scalar(select(Student.id).where(Student.school_code==school_code,Student.login_name==norm_name(name)).limit(1))
                         if exists: raise ValueError("این دانش‌آموز قبلاً ثبت شده است.")
                         target=User(telegram_id=None,name=name,role="STUDENT",active=True); s.add(target); await s.flush()
-                        s.add(Student(user_id=target.id,class_id=c0.id,school_code=school_code,login_name=norm_name(name))); await s.commit()
+                        s.add(Student(user_id=target.id,class_id=c0.id,school_code=school_code,login_name=norm_name(name)))
+                        s.add(StudentPermissionSettings(user_id=target.id))
+                        await s.commit()
                         await log_action(u.id,"student_provisioned",f"{school_code}|{name}|{c0.name}"); await reply_long(update.message, "✅ حساب دانش‌آموز ثبت شد.")
                     elif p[0]=="ویرایش" and len(p)==5:
                         st=await s.get(Student,int(p[1])); c0=await get_class_by_name(s,p[4])
@@ -2673,7 +2683,9 @@ async def process_state(update, context, u):
                     elif p[0]=="حذف" and len(p)==2:
                         st=await s.get(Student,int(p[1]))
                         if not st: raise ValueError("دانش‌آموز پیدا نشد.")
-                        target=await s.get(User,st.user_id); await s.delete(st)
+                        target=await s.get(User,st.user_id)
+                        await s.execute(delete(StudentPermissionSettings).where(StudentPermissionSettings.user_id == st.user_id))
+                        await s.delete(st)
                         if target: target.role,target.active,target.telegram_id="PENDING",False,None
                         await s.commit(); await reply_long(update.message, "✅ دانش‌آموز حذف و حساب او غیرفعال شد.")
                     else: raise ValueError("فرمت: افزودن|کد مدرسه|نام|کلاس / ویرایش|شناسه|کد|نام|کلاس / حذف|شناسه")
