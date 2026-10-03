@@ -1351,7 +1351,7 @@ async def show_admin(update, context, u):
         context.user_data["state"] = "admin_subject"
         await reply_long(update.message, "📚 مدیریت درس‌ها\n\nاز دکمه‌های زیر یکی را انتخاب کنید: «افزودن»، «ویرایش» یا «حذف»؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "🔔 تنظیم اعلان‌های دانش‌آموزان":
-        await send_admin_notification_list(update.message)
+        await send_admin_notification_list(update.message, 0)
     elif t == "🔐 مدیریت دسترسی‌ها":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
@@ -1618,7 +1618,9 @@ async def create_announcement(bot, title, body, class_id, kind, scheduled_at, cr
             a = await s.get(Announcement, aid)
             failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == aid, Delivery.status.in_(("PENDING", "FAILED"))).limit(1))
             delivered = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == aid).limit(1))
-            if a and (delivered is None or failed is None):
+            # Mark as sent only when there are no pending/failed deliveries.
+            # A single Telegram failure must remain retryable.
+            if a and failed is None:
                 a.sent = True
             await s.commit()
     return aid
@@ -1634,7 +1636,9 @@ async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
             x = await s.get(Announcement, a.id)
             failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == a.id, Delivery.status.in_(("PENDING", "FAILED"))).limit(1))
             delivered = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == a.id).limit(1))
-            if x and (delivered is None or failed is None):
+            # Keep the announcement unsent when any recipient failed;
+            # the next scheduler run can retry it.
+            if x and failed is None:
                 x.sent = True
                 await s.commit()
 
@@ -1748,16 +1752,27 @@ async def render_admin_notification_list(query, page: int = 0):
     await query.edit_message_text(body, reply_markup=InlineKeyboardMarkup(buttons))
 
 
-async def send_admin_notification_list(message):
+async def send_admin_notification_list(message, page: int = 0):
+    """Show a paginated student picker for notification settings."""
+    page_size = 25
+    page = max(0, int(page))
     async with SessionLocal() as s:
+        total = await s.scalar(
+            select(func.count(Student.user_id)).join(User, Student.user_id == User.id)
+            .where(User.role == "STUDENT")
+        )
+        max_page = max(0, (int(total or 0) - 1) // page_size)
+        page = min(page, max_page)
         rows = (await s.execute(
             select(User, ClassRoom)
             .join(Student, Student.user_id == User.id)
             .join(ClassRoom, Student.class_id == ClassRoom.id, isouter=True)
             .where(User.role == "STUDENT")
-            .order_by(User.name)
-            .limit(100)
+            .order_by(User.name, User.id)
+            .offset(page * page_size)
+            .limit(page_size)
         )).all()
+
     buttons = [
         [InlineKeyboardButton(
             f"{user.name or 'بدون نام'} — {cls.name if cls else 'بدون کلاس'}",
@@ -1766,13 +1781,24 @@ async def send_admin_notification_list(message):
         )]
         for user, cls in rows
     ]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"adminnotify:list:{page-1}", style="primary"))
+    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="adminnotify:noop", style="secondary"))
+    if page < max_page:
+        nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"adminnotify:list:{page+1}", style="primary"))
+    if nav:
+        buttons.append(nav)
     buttons.append([InlineKeyboardButton("⚙️ بازگشت به پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
+
+    body = "🔔 تنظیم اعلان‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:"
+    if not rows:
+        body += "\n\nهنوز دانش‌آموزی ثبت نشده است."
     await reply_long(
         message,
-        "🔔 تنظیم اعلان‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:",
+        body,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
-
 
 async def send_submission_list(message, assigner):
     async with SessionLocal() as s:
@@ -2250,6 +2276,10 @@ async def process_state(update, context, u):
             await s.commit()
         context.user_data.clear()
         await log_action(account.id, "student_login", code)
+        # A successful login is also an entry to the student panel: deliver
+        # unread announcements, tomorrow notices, question answers, and
+        # homework-review results immediately, respecting per-student settings.
+        await send_student_entry_digest(context.bot, account)
         await panel(update, f"سلام {account.name} 👋\nورود با موفقیت انجام شد.\n🏫 کد مدرسه: {code}")
         return True
 
