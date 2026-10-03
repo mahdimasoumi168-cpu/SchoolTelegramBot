@@ -337,6 +337,9 @@ def operation_markup(prompt: str):
     for label, command, style in candidates:
         if label in text:
             options.append(InlineKeyboardButton(label, callback_data=f"action:{command}", style=style))
+    if not options and "عملیات" in text:
+        for label, style in (("افزودن", "success"), ("ویرایش", "primary"), ("حذف", "danger")):
+            options.append(InlineKeyboardButton(label, callback_data=f"action:{label}", style=style))
     if not options:
         return None
     rows = [[item] for item in options]
