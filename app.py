@@ -306,7 +306,7 @@ def button_style(label: str):
         return "success"
     if any(word in value for word in ("شروع", "بعدی", "ویرایش", "پاسخ", "نمایش")):
         return "primary"
-    return None
+    return "primary"
 
 
 def styled_button(label, callback_data):
@@ -361,10 +361,13 @@ def back_to_panel_markup(role):
 
 
 def navigation_markup():
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("↩️ بازگشت به پنل", callback_data="menu:__BACK_PANEL__", style="primary"),
-        InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__", style="success"),
-    ]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ انصراف", callback_data="menu:__CANCEL__", style="danger")],
+        [
+            InlineKeyboardButton("↩️ بازگشت به پنل", callback_data="menu:__BACK_PANEL__", style="primary"),
+            InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__", style="success"),
+        ],
+    ])
 
 async def reply_panel_text(message, text: str, user):
     await reply_long(message, text, reply_markup=back_to_panel_markup(user.role))
@@ -489,8 +492,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply_long(update.message, 
         "🔐 ورود به سامانه مدرسه\n\nلطفاً نوع حساب خود را انتخاب کنید:",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("👨‍🎓 ورود دانش‌آموز", callback_data="auth:student")],
-            [InlineKeyboardButton("👤 ورود تعیین‌کننده", callback_data="auth:assigner")],
+            [InlineKeyboardButton("👨‍🎓 ورود دانش‌آموز", callback_data="auth:student", style="primary")],
+            [InlineKeyboardButton("👤 ورود تعیین‌کننده", callback_data="auth:assigner", style="success")],
         ])
     )
 
@@ -610,9 +613,9 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                 query.message,
                 "🔐 ورود به سامانه مدرسه\\n\\nلطفاً نوع حساب خود را انتخاب کنید:",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("👨‍🎓 ورود دانش‌آموز", callback_data="auth:student")],
-                    [InlineKeyboardButton("👤 ورود تعیین‌کننده", callback_data="auth:assigner")],
-                    [InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__")],
+                    [InlineKeyboardButton("👨‍🎓 ورود دانش‌آموز", callback_data="auth:student", style="primary")],
+                    [InlineKeyboardButton("👤 ورود تعیین‌کننده", callback_data="auth:assigner", style="success")],
+                    [InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__", style="success")],
                 ]),
             )
         return
@@ -677,7 +680,7 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update.message,
         "با موفقیت خارج شدید. برای ورود دوباره دکمه زیر را بزنید:",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 شروع مجدد / ورود دوباره", callback_data="menu:__RESTART__")
+            InlineKeyboardButton("🔄 شروع مجدد / ورود دوباره", callback_data="menu:__RESTART__", style="success")
         ]]),
     )
 
@@ -759,8 +762,8 @@ async def show_student(update, u, context=None):
             buttons = []
             for day in dates:
                 jy, jm, jd = gregorian_to_jalali(day.year, day.month, day.day)
-                buttons.append([InlineKeyboardButton(f"📅 {jy:04d}/{jm:02d}/{jd:02d}", callback_data=f"note_date:{day.isoformat()}")])
-            buttons.append([InlineKeyboardButton("بازگشت به پنل دانش‌آموز", callback_data="menu:__BACK_PANEL__")])
+                buttons.append([InlineKeyboardButton(f"📅 {jy:04d}/{jm:02d}/{jd:02d}", callback_data=f"note_date:{day.isoformat()}", style="primary")])
+            buttons.append([InlineKeyboardButton("بازگشت به پنل دانش‌آموز", callback_data="menu:__BACK_PANEL__", style="primary")])
             await reply_long(update.message, "📖 جزوات بر اساس تاریخ بارگذاری\n\nتاریخ موردنظر را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(buttons))
     elif update.message.text == "❓ سؤال":
         # The normal message handler already provides the real context.
@@ -875,12 +878,12 @@ async def advance_wizard_field(update, context, u, flow_key):
             continue
         label = "کلاس" if key == "class" else "درس"
         buttons = [
-            [InlineKeyboardButton(name, callback_data=f"wizard:{flow_key}:{key}:{oid}")]
+            [InlineKeyboardButton(name, callback_data=f"wizard:{flow_key}:{key}:{oid}", style="primary")]
             for oid, name in options
         ]
         buttons.append([
             InlineKeyboardButton("↩️ بازگشت به پنل", callback_data="menu:__BACK_PANEL__"),
-            InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__"),
+            InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__", style="success"),
         ])
         await reply_long(update.message, f"لطفاً {label} را از فهرست انتخاب کنید:", reply_markup=InlineKeyboardMarkup(buttons))
         return
