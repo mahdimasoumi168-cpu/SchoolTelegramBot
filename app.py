@@ -2445,7 +2445,7 @@ async def process_state(update, context, u):
                     elif p[0] == "حذف" and len(p)==2:
                         c0=await get_class_by_name(s,p[1])
                         if not c0: raise ValueError("کلاس پیدا نشد.")
-                        deps=[await s.scalar(select(Student.id).where(Student.class_id==c0.id).limit(1)),await s.scalar(select(Subject.id).where(Subject.class_id==c0.id).limit(1)),await s.scalar(select(Access.id).where(Access.class_id==c0.id).limit(1)),await s.scalar(select(Schedule.id).where(Schedule.class_id==c0.id).limit(1)),await s.scalar(select(Announcement.id).where(Announcement.class_id==c0.id).limit(1))]
+                        deps=[await s.scalar(select(Student.id).where(Student.class_id==c0.id).limit(1)),await s.scalar(select(Subject.id).where(Subject.class_id==c0.id).limit(1)),await s.scalar(select(Access.id).where(Access.class_id==c0.id).limit(1)),await s.scalar(select(Schedule.id).where(Schedule.class_id==c0.id).limit(1)),await s.scalar(select(Announcement.id).where(Announcement.class_id==c0.id).limit(1)),await s.scalar(select(HomeworkSubmission.id).where(HomeworkSubmission.class_id==c0.id).limit(1))]
                         if any(x is not None for x in deps): raise ValueError("این کلاس هنوز وابستگی دارد؛ ابتدا آن‌ها را مدیریت کنید.")
                         await s.delete(c0); await s.commit(); await reply_long(update.message, "✅ کلاس حذف شد.")
                     else: raise ValueError("فرمت: افزودن|نام کلاس / ویرایش|نام قبلی|نام جدید / حذف|نام کلاس")
@@ -2512,6 +2512,17 @@ async def process_state(update, context, u):
                         if not sub or not c0: raise ValueError("درس یا کلاس پیدا نشد.")
                         duplicate=await s.scalar(select(Subject.id).where(Subject.name==p[2],Subject.class_id==c0.id,Subject.id!=sub.id).limit(1))
                         if duplicate: raise ValueError("این درس قبلاً در این کلاس ثبت شده است.")
+                        if sub.class_id != c0.id:
+                            deps=[
+                                await s.scalar(select(Assignment.id).where(Assignment.subject_id==sub.id).limit(1)),
+                                await s.scalar(select(Exam.id).where(Exam.subject_id==sub.id).limit(1)),
+                                await s.scalar(select(Schedule.id).where(Schedule.subject_id==sub.id).limit(1)),
+                                await s.scalar(select(Note.id).where(Note.subject_id==sub.id).limit(1)),
+                                await s.scalar(select(Question.id).where(Question.subject_id==sub.id).limit(1)),
+                                await s.scalar(select(Access.id).where(Access.subject_id==sub.id).limit(1)),
+                            ]
+                            if any(item is not None for item in deps):
+                                raise ValueError("این درس سوابق یا دسترسی ثبت‌شده دارد؛ برای جلوگیری از جابه‌جایی نادرست اطلاعات، ابتدا وابستگی‌ها را مدیریت کنید.")
                         sub.name,sub.class_id=p[2],c0.id; await s.commit(); await reply_long(update.message, "✅ درس ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         sub=await s.get(Subject,int(p[1]))
@@ -2833,7 +2844,9 @@ async def process_state(update, context, u):
                         sub=matches[0] if matches else None
                         if not e or not sub: raise ValueError("امتحان یا درس پیدا نشد.")
                         if e.subject_id not in {x.id for x in subs}: raise ValueError("به این امتحان دسترسی ندارید.")
-                        e.subject_id,e.title,e.exam_at,e.details=sub.id,p[3],parse_dt(p[4]),p[5]; await s.commit(); await reply_long(update.message, "✅ امتحان ویرایش شد.")
+                        new_exam_at=parse_dt(p[4])
+                        if new_exam_at is None: raise ValueError("تاریخ و ساعت امتحان نامعتبر است.")
+                        e.subject_id,e.title,e.exam_at,e.details=sub.id,p[3],new_exam_at,p[5]; await s.commit(); await reply_long(update.message, "✅ امتحان ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         e=await s.get(Exam,int(p[1]))
                         if not e or e.subject_id not in {x.id for x in subs}: raise ValueError("امتحان پیدا نشد یا دسترسی ندارید.")
@@ -2848,6 +2861,7 @@ async def process_state(update, context, u):
                         if not sub: raise ValueError("این درس برای شما مجاز نیست.")
                         acc=(await s.execute(select(Access).where(Access.assigner_user_id==u.id,Access.subject_id==sub.id))).scalars().first()
                         if not acc: raise ValueError("دسترسی کلاس پیدا نشد.")
+                        if sub.class_id != acc.class_id: raise ValueError("درس با کلاسِ دسترسی تعیین‌کننده هم‌خوانی ندارد؛ دسترسی را در مدیریت اصلاح کنید.")
                         s.add(Schedule(class_id=acc.class_id,subject_id=sub.id,weekday=p[2],period=p[3])); await s.commit(); await create_announcement(context.bot,"تغییر برنامه هفتگی",f"{sub.name} - {p[2]} - {p[3]}",acc.class_id,"announcement",None,u.id); await reply_long(update.message, "✅ برنامه ثبت شد و اطلاع‌رسانی شد.")
                     elif p[0]=="ویرایش" and len(p)==5:
                         sch=await s.get(Schedule,int(p[1])); matches=[x for x in subs if x.name==p[2]]
@@ -2857,6 +2871,7 @@ async def process_state(update, context, u):
                         if sch.subject_id not in {x.id for x in subs}: raise ValueError("به این برنامه دسترسی ندارید.")
                         acc=(await s.execute(select(Access).where(Access.assigner_user_id==u.id,Access.subject_id==sub.id))).scalars().first()
                         if not acc or sch.class_id!=acc.class_id: raise ValueError("به این برنامه دسترسی ندارید.")
+                        if sub.class_id != acc.class_id: raise ValueError("درس با کلاسِ دسترسی تعیین‌کننده هم‌خوانی ندارد؛ دسترسی را در مدیریت اصلاح کنید.")
                         sch.subject_id,sch.weekday,sch.period=sub.id,p[3],p[4]; await s.commit(); await reply_long(update.message, "✅ برنامه ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         sch=await s.get(Schedule,int(p[1]))
