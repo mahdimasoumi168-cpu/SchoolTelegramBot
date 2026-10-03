@@ -1818,7 +1818,11 @@ async def finalize_submission_review(bot, reviewer, submission_id: int, status: 
     if status not in ("APPROVED", "REJECTED"):
         raise ValueError("وضعیت بررسی معتبر نیست.")
     async with SessionLocal() as s:
-        submission = await s.get(HomeworkSubmission, submission_id)
+        submission = (await s.execute(
+            select(HomeworkSubmission)
+            .where(HomeworkSubmission.id == submission_id)
+            .with_for_update()
+        )).scalar_one_or_none()
         if not submission:
             raise ValueError("تکلیف تصویری پیدا نشد.")
         if submission.status != "PENDING":
@@ -2394,6 +2398,10 @@ async def process_state(update, context, u):
                         role_map={"دانش‌آموز":"STUDENT","تعیین‌کننده":"ASSIGNER","مدیریت":"ADMIN","STUDENT":"STUDENT","ASSIGNER":"ASSIGNER","ADMIN":"ADMIN","PENDING":"PENDING"}
                         role=role_map.get(role,role)
                         if not target or role not in ("STUDENT","ASSIGNER","ADMIN","PENDING"): raise ValueError("کاربر یا نقش نامعتبر است.")
+                        if role == "STUDENT":
+                            student_profile = await s.scalar(select(Student.id).where(Student.user_id == target.id).limit(1))
+                            if not student_profile:
+                                raise ValueError("برای ساخت حساب کامل دانش‌آموز، از بخش «مدیریت دانش‌آموزان» گزینه «افزودن» را انتخاب کنید تا کد مدرسه و کلاس هم ثبت شود.")
                         if target.id==u.id and role!="ADMIN": raise ValueError("نقش مدیریت حساب جاری را نمی‌توانید حذف کنید.")
                         target.role=role; target.active=(role!="PENDING")
                         await s.commit(); await log_action(u.id,"user_role_changed",f"{target.id}|{role}")
