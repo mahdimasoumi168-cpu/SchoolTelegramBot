@@ -1514,10 +1514,23 @@ async def notify_class(bot, class_id: int | None, text: str, announcement_id: in
         if announcement:
             pref_field = announcement_notification_field(announcement)
             eligible = []
+            disabled_ids = []
             for user, student in rows:
                 settings = await s.get(StudentNotificationSettings, user.id)
                 if settings is None or bool(getattr(settings, pref_field, True)):
                     eligible.append((user, student))
+                else:
+                    disabled_ids.append(user.id)
+            if disabled_ids:
+                old_deliveries = (await s.execute(select(Delivery).where(
+                    Delivery.announcement_id == announcement_id,
+                    Delivery.user_id.in_(disabled_ids),
+                ))).scalars().all()
+                for delivery in old_deliveries:
+                    if delivery.status != "SENT":
+                        delivery.status = "SKIPPED"
+                        delivery.error = "notification disabled in student settings"
+                await s.commit()
             rows = eligible
         if not rows:
             return
@@ -1589,7 +1602,7 @@ async def create_announcement(bot, title, body, class_id, kind, scheduled_at, cr
         await notify_class(bot, class_id, f"📢 {title}\n\n{body}", aid)
         async with SessionLocal() as s:
             a = await s.get(Announcement, aid)
-            failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == aid, Delivery.status != "SENT").limit(1))
+            failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == aid, Delivery.status.in_(("PENDING", "FAILED"))).limit(1))
             delivered = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == aid).limit(1))
             if a and (delivered is None or failed is None):
                 a.sent = True
@@ -1605,7 +1618,7 @@ async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
         await notify_class(context.bot, a.class_id, f"🔔 {a.title}\n\n{a.body}", a.id)
         async with SessionLocal() as s:
             x = await s.get(Announcement, a.id)
-            failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == a.id, Delivery.status != "SENT").limit(1))
+            failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == a.id, Delivery.status.in_(("PENDING", "FAILED"))).limit(1))
             delivered = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == a.id).limit(1))
             if x and (delivered is None or failed is None):
                 x.sent = True
@@ -2910,7 +2923,7 @@ async def process_state(update, context, u):
                         await notify_class(context.bot, cid, f"📢 {title}\n\n{body}", aid)
                         async with SessionLocal() as ss:
                             x = await ss.get(Announcement, aid)
-                            failed = await ss.scalar(select(Delivery.id).where(Delivery.announcement_id == aid, Delivery.status != "SENT").limit(1))
+                            failed = await ss.scalar(select(Delivery.id).where(Delivery.announcement_id == aid, Delivery.status.in_(("PENDING", "FAILED"))).limit(1))
                             delivered = await ss.scalar(select(Delivery.id).where(Delivery.announcement_id == aid).limit(1))
                             if x and delivered is not None and failed is None:
                                 x.sent = True
