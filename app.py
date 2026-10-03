@@ -160,7 +160,7 @@ class Schedule(Base):
     __tablename__ = "schedules"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"))
-    weekday: Mapped[str] = mapped_column(String(20))
+    weekday: Mapped[str] = mapped_column(Text, default="")
     period: Mapped[str] = mapped_column(Text, default="")
     subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"))
 
@@ -3143,6 +3143,9 @@ async def init_db():
             # Existing schedule rows may contain a full multi-line weekly plan.
             # Widen the column without deleting or truncating existing data.
             await conn.execute(text("ALTER TABLE schedules ALTER COLUMN period TYPE TEXT USING period::text"))
+            # Weekly schedule text can contain a complete multi-line plan; the
+            # old VARCHAR(20) weekday column caused real insert failures.
+            await conn.execute(text("ALTER TABLE schedules ALTER COLUMN weekday TYPE TEXT USING weekday::text"))
             await conn.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"))
             await conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"))
             await conn.execute(text("ALTER TABLE questions ADD COLUMN IF NOT EXISTS student_notified BOOLEAN NOT NULL DEFAULT TRUE"))
