@@ -310,13 +310,25 @@ def back_to_panel_markup(role):
         label = "👤 بازگشت به پنل تعیین‌کننده"
     else:
         label = "👨‍🎓 بازگشت به پنل دانش‌آموز"
-    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data="menu:__BACK_PANEL__")]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(label, callback_data="menu:__BACK_PANEL__")],
+        [InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__")],
+    ])
+
+
+def navigation_markup():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("↩️ بازگشت به پنل", callback_data="menu:__BACK_PANEL__"),
+        InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__"),
+    ]])
 
 async def reply_panel_text(message, text: str, user):
     await reply_long(message, text, reply_markup=back_to_panel_markup(user.role))
 
 async def reply_long(message, text: str, **kwargs):
     """Send text safely within Telegram's 4096-character message limit."""
+    if kwargs.get("reply_markup") is None:
+        kwargs["reply_markup"] = navigation_markup()
     text = str(text or "")
     if not text:
         return await message.reply_text("", **kwargs)
@@ -525,6 +537,29 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
     if not data.startswith("menu:"):
         return
     text = data[5:]
+    if text == "__RESTART__":
+        context.user_data.clear()
+        u = await db_user(query.from_user.id)
+        if u and u.active and u.role in ("ADMIN", "ASSIGNER", "STUDENT"):
+            menu_map = {
+                "ADMIN": ("⚙️ پنل مدیریت", ADMIN_MENU),
+                "ASSIGNER": ("👤 پنل تعیین‌کننده", ASSIGNER_MENU),
+                "STUDENT": ("👨‍🎓 پنل دانش‌آموز", STUDENT_MENU),
+            }
+            title, menu_rows = menu_map[u.role]
+            await reply_long(query.message, "🔄 سامانه از ابتدا آماده شد.\\n" + title, reply_markup=keyboard(menu_rows))
+        else:
+            context.user_data["state"] = "auth_choice"
+            await reply_long(
+                query.message,
+                "🔐 ورود به سامانه مدرسه\\n\\nلطفاً نوع حساب خود را انتخاب کنید:",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("👨‍🎓 ورود دانش‌آموز", callback_data="auth:student")],
+                    [InlineKeyboardButton("👤 ورود تعیین‌کننده", callback_data="auth:assigner")],
+                    [InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__")],
+                ]),
+            )
+        return
     if text == "__BACK_PANEL__":
         context.user_data.clear()
         u = await db_user(query.from_user.id)
@@ -768,6 +803,10 @@ async def advance_wizard_field(update, context, u, flow_key):
             [InlineKeyboardButton(name, callback_data=f"wizard:{flow_key}:{key}:{oid}")]
             for oid, name in options
         ]
+        buttons.append([
+            InlineKeyboardButton("↩️ بازگشت به پنل", callback_data="menu:__BACK_PANEL__"),
+            InlineKeyboardButton("🔄 شروع مجدد", callback_data="menu:__RESTART__"),
+        ])
         await reply_long(update.message, f"لطفاً {label} را از فهرست انتخاب کنید:", reply_markup=InlineKeyboardMarkup(buttons))
         return
 
@@ -2277,7 +2316,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     log.exception("Unhandled bot error", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
         try:
-            await update.effective_message.reply_text("❌ خطای غیرمنتظره رخ داد. وضعیت شما حفظ شد؛ دوباره تلاش کنید.")
+            await update.effective_message.reply_text(
+                "❌ خطای غیرمنتظره رخ داد. می‌توانید به پنل برگردید یا کار را از ابتدا شروع کنید.",
+                reply_markup=navigation_markup(),
+            )
         except Exception:
             pass
 
