@@ -244,6 +244,20 @@ class StudentNotificationSettings(Base):
     last_digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class StudentPermissionSettings(Base):
+    __tablename__ = "student_permission_settings"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    lessons_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    assignments_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    exams_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    announcements_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    questions_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    account_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    tomorrow_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    math_homework_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
 STUDENT_MENU = [
     ["👨‍🎓 پنل دانش‌آموز", "📚 درس‌های من"],
     ["📝 تکالیف", "📅 برنامه هفتگی"],
@@ -253,6 +267,51 @@ STUDENT_MENU = [
     ["📸 ارسال تکالیف ریاضی سالمی"],
     ["🚪 خروج"],
 ]
+STUDENT_PERMISSION_FIELDS = {
+    "📚 درس‌های من": "lessons_enabled",
+    "📝 تکالیف": "assignments_enabled",
+    "📅 برنامه هفتگی": "schedule_enabled",
+    "📝 امتحانات": "exams_enabled",
+    "📢 اطلاعیه‌ها": "announcements_enabled",
+    "❓ سؤال": "questions_enabled",
+    "👤 حساب کاربری": "account_enabled",
+    "📖 جزوات": "notes_enabled",
+    "🔔 اطلاعیه فردا": "tomorrow_enabled",
+    "📸 ارسال تکالیف ریاضی سالمی": "math_homework_enabled",
+}
+STUDENT_PERMISSION_LABELS = list(STUDENT_PERMISSION_FIELDS.keys())
+
+def student_menu_rows(enabled_fields: set[str]):
+    rows = []
+    for row in STUDENT_MENU:
+        filtered = [label for label in row if label in ("👨‍🎓 پنل دانش‌آموز", "🚪 خروج") or (label in STUDENT_PERMISSION_FIELDS and STUDENT_PERMISSION_FIELDS[label] in enabled_fields)]
+        if filtered:
+            rows.append(filtered)
+    return rows
+
+async def get_student_enabled_fields(user_id: int) -> set[str]:
+    async with SessionLocal() as s:
+        settings = await s.get(StudentPermissionSettings, user_id)
+        if not settings:
+            return set(STUDENT_PERMISSION_FIELDS.values())
+        return {field for field in STUDENT_PERMISSION_FIELDS.values() if bool(getattr(settings, field, True))}
+
+async def student_menu_markup(user_id: int):
+    return keyboard(student_menu_rows(await get_student_enabled_fields(user_id)))
+
+async def student_permission_allowed(user_id: int, label: str) -> bool:
+    field = STUDENT_PERMISSION_FIELDS.get(label)
+    return True if not field else field in await get_student_enabled_fields(user_id)
+
+async def ensure_student_permission_settings(session, user_id: int):
+    settings = await session.get(StudentPermissionSettings, user_id)
+    if not settings:
+        settings = StudentPermissionSettings(user_id=user_id)
+        session.add(settings)
+        await session.flush()
+    return settings
+
+
 
 ASSIGNER_MENU = [
     ["👤 پنل تعیین‌کننده", "👨‍🎓 دانش‌آموزان"],
@@ -411,7 +470,10 @@ def navigation_markup():
     ])
 
 async def reply_panel_text(message, text: str, user):
-    await reply_long(message, text, reply_markup=back_to_panel_markup(user.role))
+    if user.role == "STUDENT":
+        await reply_long(message, text, reply_markup=await student_menu_markup(user.id))
+    else:
+        await reply_long(message, text, reply_markup=back_to_panel_markup(user.role))
 
 async def reply_long(message, text: str, **kwargs):
     """Send text safely within Telegram's 4096-character message limit."""
@@ -777,6 +839,56 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             return
         return
 
+    if data.startswith("studentperm:"):
+        parts = data.split(":")
+        u = await db_user(query.from_user.id)
+        if not u or not u.active or u.role != "ADMIN":
+            await reply_long(query.message, "فقط مدیریت می‌تواند دکمه‌های دانش‌آموزان را تنظیم کند.")
+            return
+        action = parts[1] if len(parts) > 1 else ""
+        if action == "noop": return
+        if action == "list":
+            page = 0
+            if len(parts) == 3:
+                try: page = max(0, int(parts[2]))
+                except ValueError:
+                    await reply_long(query.message, "شماره صفحه نامعتبر است.")
+                    return
+            await render_admin_student_permission_list(query.message, page)
+            return
+        if action == "student" and len(parts) == 3:
+            try: target_id = int(parts[2])
+            except ValueError:
+                await reply_long(query.message, "شناسه دانش‌آموز نامعتبر است.")
+                return
+            await render_admin_student_permission_settings(query, target_id)
+            return
+        if action in ("toggle", "all") and len(parts) == 4:
+            try: target_id = int(parts[2])
+            except ValueError:
+                await reply_long(query.message, "شناسه دانش‌آموز نامعتبر است.")
+                return
+            async with SessionLocal() as s:
+                target = await s.get(User, target_id)
+                if not target or target.role != "STUDENT":
+                    await reply_long(query.message, "دانش‌آموز پیدا نشد.")
+                    return
+                settings = await ensure_student_permission_settings(s, target_id)
+                if action == "toggle":
+                    field = parts[3]
+                    if field not in STUDENT_PERMISSION_FIELDS.values():
+                        await reply_long(query.message, "دسترسی نامعتبر است.")
+                        return
+                    setattr(settings, field, not bool(getattr(settings, field)))
+                else:
+                    if parts[3] not in ("on", "off"): return
+                    enabled = parts[3] == "on"
+                    for field in STUDENT_PERMISSION_FIELDS.values(): setattr(settings, field, enabled)
+                await s.commit()
+            await render_admin_student_permission_settings(query, target_id)
+            return
+        return
+
     if data.startswith("adminnotify:"):
         parts = data.split(":")
         u = await db_user(query.from_user.id)
@@ -876,7 +988,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         elif u.role == "ASSIGNER":
             await reply_long(query.message, "❌ عملیات لغو شد.\n👤 پنل تعیین‌کننده", reply_markup=keyboard(ASSIGNER_MENU))
         else:
-            await reply_long(query.message, "❌ عملیات لغو شد.\n👨‍🎓 پنل دانش‌آموز", reply_markup=keyboard(STUDENT_MENU))
+            await reply_long(query.message, "❌ عملیات لغو شد.\n👨‍🎓 پنل دانش‌آموز", reply_markup=await student_menu_markup(u.id)
         return
     if text == "__BACK_PANEL__":
         context.user_data.clear()
@@ -1704,6 +1816,43 @@ def notification_settings_markup(user_id, settings):
     ])
     return InlineKeyboardMarkup(rows)
 
+
+async def render_admin_student_permission_list(message, page: int = 0):
+    page_size = 25
+    page = max(0, int(page))
+    async with SessionLocal() as s:
+        total = await s.scalar(select(func.count(Student.user_id)).join(User, Student.user_id == User.id).where(User.role == "STUDENT"))
+        max_page = max(0, (int(total or 0) - 1) // page_size)
+        page = min(page, max_page)
+        rows = (await s.execute(select(User, Student, ClassRoom).join(Student, Student.user_id == User.id).join(ClassRoom, Student.class_id == ClassRoom.id, isouter=True).where(User.role == "STUDENT").order_by(User.name, User.id).offset(page * page_size).limit(page_size))).all()
+    buttons = [[InlineKeyboardButton(f"{user.name or 'بدون نام'} — {cls.name if cls else 'بدون کلاس'}", callback_data=f"studentperm:student:{user.id}", style="primary")] for user, student, cls in rows]
+    nav = []
+    if page > 0: nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"studentperm:list:{page-1}", style="primary"))
+    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="studentperm:noop", style="secondary"))
+    if page < max_page: nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"studentperm:list:{page+1}", style="primary"))
+    if nav: buttons.append(nav)
+    buttons.append([InlineKeyboardButton("⚙️ بازگشت به پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
+    body = "🎛️ تنظیم دکمه‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:"
+    if not rows: body += "\n\nهنوز دانش‌آموزی ثبت نشده است."
+    await reply_long(message, body, reply_markup=InlineKeyboardMarkup(buttons))
+
+async def render_admin_student_permission_settings(query, target_user_id: int):
+    async with SessionLocal() as s:
+        target = await s.get(User, target_user_id)
+        if not target or target.role != "STUDENT":
+            await reply_long(query.message, "❌ دانش‌آموز پیدا نشد.")
+            return
+        settings = await s.get(StudentPermissionSettings, target_user_id)
+        values = {field: bool(getattr(settings, field, True)) if settings else True for field in STUDENT_PERMISSION_FIELDS.values()}
+    buttons = []
+    for label, field in STUDENT_PERMISSION_FIELDS.items():
+        enabled = values[field]
+        buttons.append([InlineKeyboardButton(f"{'🟢 فعال' if enabled else '🔴 غیرفعال'} — {label}", callback_data=f"studentperm:toggle:{target_user_id}:{field}", style="success" if enabled else "danger")])
+    buttons.append([InlineKeyboardButton("✅ فعال‌سازی همه", callback_data=f"studentperm:all:{target_user_id}:on", style="success"), InlineKeyboardButton("⛔ غیرفعال‌سازی همه", callback_data=f"studentperm:all:{target_user_id}:off", style="danger")])
+    buttons.append([InlineKeyboardButton("⬅️ انتخاب دانش‌آموز", callback_data="studentperm:list:0", style="primary")])
+    buttons.append([InlineKeyboardButton("⚙️ پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
+    body = f"🎛️ تنظیم دکمه‌های دانش‌آموز\n\n👨‍🎓 {target.name or 'بدون نام'}\n\nبا انتخاب هر گزینه، همان دکمه برای این دانش‌آموز فعال یا غیرفعال می‌شود."
+    await query.edit_message_text(body, reply_markup=InlineKeyboardMarkup(buttons))
 
 async def render_admin_notification_settings(query, target_user_id: int):
     async with SessionLocal() as s:
@@ -3363,7 +3512,7 @@ def main():
         .build()
     )
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:|note_date:|action:|mathsub:|submission:|adminnotify:)"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:|note_date:|action:|mathsub:|submission:|adminnotify:|studentperm:)"))
     app.add_handler(MessageHandler(filters.PHOTO, photo_message))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
