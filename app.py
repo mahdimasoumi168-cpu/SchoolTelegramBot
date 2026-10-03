@@ -1018,7 +1018,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         elif u.role == "ASSIGNER":
             await reply_long(query.message, "❌ عملیات لغو شد.\n👤 پنل تعیین‌کننده", reply_markup=keyboard(ASSIGNER_MENU))
         else:
-            await reply_long(query.message, "❌ عملیات لغو شد.\n👨‍🎓 پنل دانش‌آموز", reply_markup=await student_menu_markup(u.id)
+            await reply_long(query.message, "❌ عملیات لغو شد.\n👨‍🎓 پنل دانش‌آموز", reply_markup=await student_menu_markup(u.id))
         return
     if text == "__BACK_PANEL__":
         context.user_data.clear()
