@@ -1242,25 +1242,25 @@ async def show_assigner(update, context, u):
             preview = await panel_inquiry_text(s, u, t)
             if preview: await reply_panel_text(update.message, preview, u)
         context.user_data["state"] = "assigner_assignment"
-        await reply_long(update.message, "📝 مدیریت تکالیف\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید. بعد از آن هر فیلد را جداگانه از شما می‌گیرم.")
+        await reply_long(update.message, "📝 مدیریت تکالیف\n\nاز دکمه‌های زیر یکی را انتخاب کنید: «افزودن»، «ویرایش» یا «حذف». بعد از آن هر فیلد را جداگانه از شما می‌گیرم.")
     elif t == "📢 ارسال اطلاعیه":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
             if preview: await reply_panel_text(update.message, preview, u)
         context.user_data["state"] = "assigner_announcement"
-        await reply_long(update.message, "📢 ارسال اطلاعیه\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان و متن اطلاعیه را جداگانه ارسال کنید. اطلاعیه برای کلاس‌های مجاز شما ارسال می‌شود.")
+        await reply_long(update.message, "📢 ارسال اطلاعیه\n\nبرای شروع، دکمه «افزودن» را انتخاب کنید؛ سپس عنوان و متن اطلاعیه را جداگانه ارسال کنید. اطلاعیه برای کلاس‌های مجاز شما ارسال می‌شود.")
     elif t == "📅 برنامه هفتگی":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
             if preview: await reply_panel_text(update.message, preview, u)
         context.user_data["state"] = "assigner_schedule"
-        await reply_long(update.message, "📅 مدیریت برنامه هفتگی\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید. افزودن، برنامه‌های قبلی را حذف نمی‌کند.")
+        await reply_long(update.message, "📅 مدیریت برنامه هفتگی\n\nاز دکمه‌های زیر یکی را انتخاب کنید: «افزودن»، «ویرایش» یا «حذف»؛ سپس هر فیلد را جداگانه ارسال کنید. افزودن، برنامه‌های قبلی را حذف نمی‌کند.")
     elif t == "📝 امتحانات":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
             if preview: await reply_panel_text(update.message, preview, u)
         context.user_data["state"] = "assigner_exam"
-        await reply_long(update.message, "📝 مدیریت امتحانات\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال کنید.")
+        await reply_long(update.message, "📝 مدیریت امتحانات\n\nاز دکمه‌های زیر یکی را انتخاب کنید: «افزودن»، «ویرایش» یا «حذف»؛ سپس هر فیلد را جداگانه ارسال کنید.")
     elif t == "📖 جزوات":
         async with SessionLocal() as s:
             subs = await allowed_subjects(s, u)
@@ -1279,7 +1279,7 @@ async def show_assigner(update, context, u):
                 preview.append("هنوز جزوه‌ای برای دسترسی شما ثبت نشده است.")
             await reply_panel_text(update.message, "\n".join(preview), u)
         context.user_data["state"] = "assigner_note_title"
-        await reply_long(update.message, "حالا «افزودن» یا «حذف» را ارسال کنید. برای افزودن، درس از فهرست دسترسی شما انتخاب می‌شود و عنوان را جداگانه می‌گیرم.")
+        await reply_long(update.message, "یکی از دکمه‌های «افزودن» یا «حذف» را انتخاب کنید. برای افزودن، درس از فهرست دسترسی شما انتخاب می‌شود و عنوان را جداگانه می‌گیرم.")
     elif t == "❓ سؤالات":
         async with SessionLocal() as s:
             allowed_ids = (await s.execute(select(Access.subject_id).where(Access.assigner_user_id == u.id, Access.subject_id.is_not(None)))).scalars().all()
@@ -1295,13 +1295,13 @@ async def show_assigner(update, context, u):
             else:
                 await reply_panel_text(update.message, "\n".join(f"#{x.id} — {u2.name}\n{x.text}" for x, u2 in data), u)
             context.user_data["state"] = "assigner_answer"
-            await reply_long(update.message, "برای پاسخ به سؤال، ابتدا «پاسخ» را ارسال کنید؛ سپس شماره سؤال و در پیام بعدی متن پاسخ را بفرستید. برای لغو «انصراف» را ارسال کنید.")
+            await reply_long(update.message, "برای پاسخ به سؤال، دکمه «پاسخ» را انتخاب کنید؛ سپس شماره سؤال و در پیام بعدی متن پاسخ را بفرستید. برای لغو، دکمه «انصراف» را بزنید.")
     elif t == "🔔 اطلاعیه فردا":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
             if preview: await reply_panel_text(update.message, preview, u)
         context.user_data["state"] = "assigner_tomorrow"
-        await reply_long(update.message, "🔔 اطلاعیه فردا\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و زمان را جداگانه ارسال کنید.")
+        await reply_long(update.message, "🔔 اطلاعیه فردا\n\nبرای شروع، دکمه «افزودن» را انتخاب کنید؛ سپس عنوان، متن و زمان را جداگانه ارسال کنید.")
     else:
         await reply_long(update.message, "پنل تعیین‌کننده آماده است.", reply_markup=keyboard(ASSIGNER_MENU))
 
@@ -1314,28 +1314,28 @@ async def show_admin(update, context, u):
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_student"
-        await reply_long(update.message, "👨‍🎓 مدیریت دانش‌آموزان\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
+        await reply_long(update.message, "👨‍🎓 مدیریت دانش‌آموزان\n\nاز دکمه‌های زیر یکی را انتخاب کنید: «افزودن»، «ویرایش» یا «حذف»؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "👤 مدیریت تعیین‌کنندگان":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_assigner"
-        await reply_long(update.message, "👤 مدیریت تعیین‌کنندگان\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
+        await reply_long(update.message, "👤 مدیریت تعیین‌کنندگان\n\nاز دکمه‌های زیر یکی را انتخاب کنید: «افزودن»، «ویرایش» یا «حذف»؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "🏫 مدیریت کلاس‌ها":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_class"
-        await reply_long(update.message, "🏫 مدیریت کلاس‌ها\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس اطلاعات لازم را جداگانه ارسال می‌کنم.")
+        await reply_long(update.message, "🏫 مدیریت کلاس‌ها\n\nاز دکمه‌های زیر یکی را انتخاب کنید: «افزودن»، «ویرایش» یا «حذف»؛ سپس اطلاعات لازم را جداگانه ارسال می‌کنم.")
     elif t == "📚 مدیریت درس‌ها":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_subject"
-        await reply_long(update.message, "📚 مدیریت درس‌ها\n\nابتدا «افزودن»، «ویرایش» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
+        await reply_long(update.message, "📚 مدیریت درس‌ها\n\nاز دکمه‌های زیر یکی را انتخاب کنید: «افزودن»، «ویرایش» یا «حذف»؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "🔔 تنظیم اعلان‌های دانش‌آموزان":
         await send_admin_notification_list(update.message)
     elif t == "🔐 مدیریت دسترسی‌ها":
@@ -1351,14 +1351,14 @@ async def show_admin(update, context, u):
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_assignment"
-        await reply_long(update.message, "📝 مدیریت تکالیف\n\nابتدا عملیات را بفرستید؛ فقط اطلاعات لازم را جداگانه دریافت می‌کنم و درس از اطلاعات ثبت‌شده تعیین می‌شود.")
+        await reply_long(update.message, "📝 مدیریت تکالیف\n\nیکی از دکمه‌های عملیات را انتخاب کنید؛ فقط اطلاعات لازم را جداگانه دریافت می‌کنم و درس از اطلاعات ثبت‌شده تعیین می‌شود.")
     elif t == "📝 مدیریت امتحانات":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_exam"
-        await reply_long(update.message, "📝 مدیریت امتحانات\n\nابتدا عملیات را بفرستید؛ سپس هر فیلد را در پیام جداگانه دریافت می‌کنم.")
+        await reply_long(update.message, "📝 مدیریت امتحانات\n\nیکی از دکمه‌های عملیات را انتخاب کنید؛ سپس هر فیلد را در پیام جداگانه دریافت می‌کنم.")
     elif t == "📖 مدیریت جزوات":
         async with SessionLocal() as s:
             rows = (await s.execute(
@@ -1371,20 +1371,20 @@ async def show_admin(update, context, u):
                 preview.append("هنوز جزوه‌ای ثبت نشده است.")
             await reply_panel_text(update.message, "\n".join(preview), u)
         context.user_data["state"] = "admin_note_title"
-        await reply_long(update.message, "حالا «افزودن» یا «حذف» را ارسال کنید. برای افزودن، درس از فهرست موجود انتخاب می‌شود و عنوان را جداگانه می‌گیرم.")
+        await reply_long(update.message, "یکی از دکمه‌های «افزودن» یا «حذف» را انتخاب کنید. برای افزودن، درس از فهرست موجود انتخاب می‌شود و عنوان را جداگانه می‌گیرم.")
     elif t == "📅 مدیریت برنامه هفتگی":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_schedule"
-        await reply_long(update.message, "📅 مدیریت برنامه هفتگی\n\nابتدا عملیات را بفرستید؛ کلاس و درس از اطلاعات ثبت‌شده تعیین می‌شوند و فقط روز و زنگ لازم دریافت می‌شود. افزودن، رکوردهای قبلی را حذف نمی‌کند.")
+        await reply_long(update.message, "📅 مدیریت برنامه هفتگی\n\nیکی از دکمه‌های عملیات را انتخاب کنید؛ کلاس و درس از اطلاعات ثبت‌شده تعیین می‌شوند و فقط روز و زنگ لازم دریافت می‌شود. افزودن، رکوردهای قبلی را حذف نمی‌کند.")
     elif t in ("📢 مدیریت اطلاعیه‌ها", "📨 ارسال پیام همگانی"):
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
             if preview: await reply_panel_text(update.message, preview, u)
         context.user_data["state"] = "admin_announcement"
-        await reply_long(update.message, "📢 مدیریت اطلاعیه‌ها\n\nابتدا «افزودن» را بفرستید؛ عنوان و متن را جداگانه دریافت می‌کنم و مقصد از اطلاعات ثبت‌شده تعیین می‌شود.")
+        await reply_long(update.message, "📢 مدیریت اطلاعیه‌ها\n\nبرای شروع، دکمه «افزودن» را انتخاب کنید؛ عنوان و متن را جداگانه دریافت می‌کنم و مقصد از اطلاعات ثبت‌شده تعیین می‌شود.")
     elif t == "🔔 اطلاعیه فردا":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
@@ -1398,14 +1398,14 @@ async def show_admin(update, context, u):
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_questions"
-        await reply_long(update.message, "❓ مدیریت سؤالات\n\n«نمایش»، «پاسخ» یا «حذف» را ارسال کنید؛ سپس اطلاعات لازم را جداگانه می‌گیرم.")
+        await reply_long(update.message, "❓ مدیریت سؤالات\n\nیکی از دکمه‌های «نمایش»، «پاسخ» یا «حذف» را انتخاب کنید؛ سپس اطلاعات لازم را جداگانه می‌گیرم.")
     elif t == "👥 مدیریت کاربران":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_users"
-        await reply_long(update.message, "👥 مدیریت کاربران\n\n«نمایش»، «فعال»، «غیرفعال» یا «تغییر نقش» را ارسال کنید؛ سپس اطلاعات لازم را جداگانه وارد می‌کنید.")
+        await reply_long(update.message, "👥 مدیریت کاربران\n\nیکی از دکمه‌های «نمایش»، «فعال»، «غیرفعال» یا «تغییر نقش» را انتخاب کنید؛ سپس اطلاعات لازم را جداگانه وارد می‌کنید.")
     elif t in ("📊 گزارش‌ها", "📋 گزارش فعالیت‌ها", "🕐 تاریخچه تغییرات"):
         async with SessionLocal() as s:
             users = await s.scalar(select(User).count()) if False else None
@@ -1417,7 +1417,7 @@ async def show_admin(update, context, u):
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_files"
-        await reply_long(update.message, "🗂️ مدیریت فایل‌ها\n\nبرای فهرست فایل‌ها «نمایش» و برای حذف یک فایل «حذف» را ارسال کنید؛ شناسه فایل را در پیام بعدی می‌گیرم.")
+        await reply_long(update.message, "🗂️ مدیریت فایل‌ها\n\nبرای فهرست، دکمه «نمایش» و برای حذف، دکمه «حذف» را انتخاب کنید؛ شناسه فایل را در پیام بعدی می‌گیرم.")
     elif t == "⚙️ تنظیمات بات":
         await reply_panel_text(update.message, f"⚙️ تنظیمات فعال\nمنطقه زمانی: {TIMEZONE}\nپایگاه‌داده: {'PostgreSQL' if 'postgres' in DATABASE_URL else 'سایر'}", u)
     elif t == "🗄️ مدیریت دیتابیس":
@@ -1427,7 +1427,7 @@ async def show_admin(update, context, u):
         await reply_panel_text(update.message, "امنیت: توکن فقط از متغیر محیطی خوانده می‌شود؛ نقش‌ها در DB کنترل می‌شوند؛ اطلاعات حساس در GitHub ذخیره نشده است.", u)
     elif t == "🔔 ارسال اعلان":
         context.user_data["state"] = "admin_announcement"
-        await reply_long(update.message, "📨 ارسال اعلان\n\nابتدا «افزودن» را بفرستید؛ سپس عنوان، متن و کلاس را جداگانه ارسال کنید.")
+        await reply_long(update.message, "📨 ارسال اعلان\n\nبرای شروع، دکمه «افزودن» را انتخاب کنید؛ سپس عنوان، متن و کلاس را جداگانه ارسال کنید.")
     else:
         await reply_long(update.message, "پنل مدیریت آماده است.", reply_markup=keyboard(ADMIN_MENU))
 
@@ -2324,7 +2324,7 @@ async def process_state(update, context, u):
                 else:
                     await advance_wizard_field(update, context, u, "admin_flow")
                 return True
-            await reply_long(update.message, "عملیات را جداگانه ارسال کنید: «افزودن» یا «ویرایش» یا «حذف».")
+            await reply_long(update.message, "عملیات مشخص نیست؛ یکی از دکمه‌های «افزودن»، «ویرایش» یا «حذف» را انتخاب کنید.")
             return True
         fields = flow["fields"]
         i = flow["i"]
@@ -2772,7 +2772,7 @@ async def process_state(update, context, u):
                 context.user_data["assigner_flow"] = {"action": text, "i": 0, "values": [], "fields": assigner_wizard_specs[state][text]}
                 await advance_wizard_field(update, context, u, "assigner_flow")
                 return True
-            await reply_long(update.message, "عملیات را جداگانه ارسال کنید: «افزودن»، «ویرایش»، «حذف» یا برای سؤال «پاسخ».")
+            await reply_long(update.message, "یکی از دکمه‌های عملیات را انتخاب کنید: «افزودن»، «ویرایش»، «حذف» یا «پاسخ».")
             return True
         fields = flow["fields"]
         if not context.user_data.pop("_wizard_callback_ready", False):
