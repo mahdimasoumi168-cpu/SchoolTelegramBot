@@ -1991,7 +1991,7 @@ async def process_state(update, context, u):
         try:
             await finalize_submission_review(context.bot, u, int(sid), "REJECTED", text)
             context.user_data.clear()
-            await reply_long(update.message, f"❌ تکلیف #{sid} رد شد و توضیح برای دانش‌آموز ارسال شد.", reply_markup=InlineKeyboardMarkup([
+            await reply_long(update.message, f"❌ تکلیف #{sid} رد شد و توضیح ثبت شد.", reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📥 بررسی تکالیف بعدی", callback_data="submission:list", style="primary")],
                 [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
             ]))
