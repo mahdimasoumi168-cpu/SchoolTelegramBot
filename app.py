@@ -960,7 +960,10 @@ async def show_student(update, u, context=None):
             data = q.all()
             out = ["📅 برنامه هفتگی:"]
             for sch, sub in data:
-                out.append(f"• {sch.weekday} | {sch.period} | {sub.name}")
+                if (sch.period or "").strip() == "کلی" and ("\n" in (sch.weekday or "") or len(sch.weekday or "") > 20):
+                    out.append(sch.weekday)
+                else:
+                    out.append(f"• {sch.weekday} | {sch.period} | {sub.name}")
             await reply_panel_text(update.message, "\n".join(out) if len(out) > 1 else "برنامه‌ای ثبت نشده.", u)
     elif update.message.text == "📝 امتحانات":
         async with SessionLocal() as s:
@@ -2639,7 +2642,7 @@ async def process_state(update, context, u):
                         c0=await get_class_by_name(s,p[1]); sub=await get_subject_by_name(s,p[2])
                         if not c0 or not sub: raise ValueError("کلاس یا درس پیدا نشد.")
                         if sub.class_id != c0.id: raise ValueError("این درس متعلق به کلاس انتخاب‌شده نیست.")
-                        s.add(Schedule(class_id=c0.id,subject_id=sub.id,weekday=p[3],period=p[4])); await s.commit(); await create_announcement(context.bot,"تغییر برنامه هفتگی",f"{sub.name} - {p[3]} - {p[4]}",c0.id,"announcement",None,u.id); await reply_long(update.message, "✅ برنامه ثبت شد و اطلاع‌رسانی شد.")
+                        s.add(Schedule(class_id=c0.id,subject_id=sub.id,weekday=p[3],period=p[4])); await s.commit(); await create_announcement(context.bot,"تغییر برنامه هفتگی",p[3] if p[4].strip()=="کلی" else f"{sub.name} - {p[3]} - {p[4]}",c0.id,"announcement",None,u.id); await reply_long(update.message, "✅ برنامه ثبت شد و اطلاع‌رسانی شد.")
                     elif p[0]=="ویرایش" and len(p)==6:
                         sch=await s.get(Schedule,int(p[1])); c0=await get_class_by_name(s,p[2]); sub=await get_subject_by_name(s,p[3])
                         if not sch or not c0 or not sub: raise ValueError("برنامه، کلاس یا درس پیدا نشد.")
