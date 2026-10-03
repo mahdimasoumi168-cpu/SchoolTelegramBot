@@ -1245,6 +1245,12 @@ async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
 async def process_state(update, context, u):
     state = context.user_data.get("state")
     text = update.message.text.strip()
+    # Re-check account permission on every text update, not only when opening
+    # a menu. A form may remain in memory after management disables an account.
+    if state and not state.startswith("auth_") and (u is None or not u.active):
+        context.user_data.clear()
+        await reply_long(update.message, "❌ حساب شما غیرفعال است یا دسترسی آن تغییر کرده است. برای پیگیری با مدیریت مدرسه تماس بگیرید.")
+        return True
     if text == "انصراف":
         context.user_data.clear()
         await panel(update, "عملیات لغو شد.")
@@ -2238,7 +2244,7 @@ async def document_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _document_message_locked(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = await db_user(update.effective_user.id)
-    if not u or u.role not in ("ASSIGNER", "ADMIN"):
+    if not u or not u.active or u.role not in ("ASSIGNER", "ADMIN"):
         return
     if context.user_data.get("state") not in ("assigner_note_file", "admin_note_file"):
         return
