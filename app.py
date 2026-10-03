@@ -3,6 +3,7 @@ import os
 import logging
 import sys
 import hashlib
+import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -185,6 +186,7 @@ class Announcement(Base):
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sent: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class Question(Base):
@@ -217,12 +219,37 @@ class Delivery(Base):
     __table_args__ = (UniqueConstraint("announcement_id", "user_id", name="uq_delivery_announcement_user"),)
 
 
+class HomeworkSubmission(Base):
+    __tablename__ = "homework_submissions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    student_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"), index=True)
+    photos: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    review_note: Mapped[str] = mapped_column(Text, default="")
+    student_notified: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class StudentNotificationSettings(Base):
+    __tablename__ = "student_notification_settings"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    assignments_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    announcements_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    tomorrow_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    responses_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 STUDENT_MENU = [
     ["👨‍🎓 پنل دانش‌آموز", "📚 درس‌های من"],
     ["📝 تکالیف", "📅 برنامه هفتگی"],
     ["📝 امتحانات", "📢 اطلاعیه‌ها"],
     ["❓ سؤال", "👤 حساب کاربری"],
     ["📖 جزوات", "🔔 اطلاعیه فردا"],
+    ["📸 ارسال تکالیف ریاضی سالمی"],
     ["🚪 خروج"],
 ]
 
@@ -232,6 +259,7 @@ ASSIGNER_MENU = [
     ["📢 ارسال اطلاعیه", "📅 برنامه هفتگی"],
     ["📝 امتحانات", "📖 جزوات"],
     ["❓ سؤالات", "🔔 اطلاعیه فردا"],
+    ["📥 بررسی تکالیف عکس‌ها"],
     ["🚪 خروج"],
 ]
 
@@ -248,6 +276,7 @@ ADMIN_MENU = [
     ["🗂️ مدیریت فایل‌ها", "📋 گزارش فعالیت‌ها"],
     ["🕐 تاریخچه تغییرات", "⚙️ تنظیمات بات"],
     ["🗄️ مدیریت دیتابیس", "🔒 تنظیمات امنیتی"],
+    ["🔔 تنظیم اعلان‌های دانش‌آموزان"],
     ["🚪 خروج"],
 ]
 
@@ -1271,6 +1300,17 @@ async def notify_class(bot, class_id: int | None, text: str, announcement_id: in
         rows = (await s.execute(q)).all()
         if not rows:
             return
+        announcement = await s.get(Announcement, announcement_id)
+        if announcement:
+            pref_field = announcement_notification_field(announcement)
+            eligible = []
+            for user, student in rows:
+                settings = await s.get(StudentNotificationSettings, user.id)
+                if settings is None or bool(getattr(settings, pref_field, True)):
+                    eligible.append((user, student))
+            rows = eligible
+        if not rows:
+            return
 
         user_ids = [user.id for user, _ in rows]
         existing = (await s.execute(
@@ -1360,6 +1400,338 @@ async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
             if x and (delivered is None or failed is None):
                 x.sent = True
                 await s.commit()
+
+
+
+
+NOTIFICATION_LABELS = {
+    "assignments_enabled": "اعلان تکالیف",
+    "announcements_enabled": "اطلاعیه‌های عمومی",
+    "tomorrow_enabled": "اطلاعیه‌های فردا",
+    "responses_enabled": "پاسخ‌ها و نتیجه بررسی تکالیف",
+}
+
+
+async def get_student_notification_settings(session, user_id: int):
+    settings = await session.get(StudentNotificationSettings, user_id)
+    if settings is None:
+        settings = StudentNotificationSettings(user_id=user_id)
+        session.add(settings)
+        await session.flush()
+    return settings
+
+
+def announcement_notification_field(announcement):
+    if announcement.kind == "tomorrow":
+        return "tomorrow_enabled"
+    if (announcement.title or "").startswith("تکلیف جدید:"):
+        return "assignments_enabled"
+    return "announcements_enabled"
+
+
+def notification_settings_markup(user_id, settings):
+    rows = []
+    for key, label in NOTIFICATION_LABELS.items():
+        enabled = bool(getattr(settings, key))
+        state = "روشن" if enabled else "خاموش"
+        style = "success" if enabled else "danger"
+        rows.append([InlineKeyboardButton(
+            f"{'🟢' if enabled else '⚪'} {label}: {state}",
+            callback_data=f"adminnotify:toggle:{user_id}:{key}",
+            style=style,
+        )])
+    rows.extend([
+        [InlineKeyboardButton("↩️ بازگشت به فهرست دانش‌آموزان", callback_data="adminnotify:list")],
+        [InlineKeyboardButton("⚙️ بازگشت به پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")],
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+async def render_admin_notification_settings(query, target_user_id: int):
+    async with SessionLocal() as s:
+        target = await s.get(User, target_user_id)
+        student = (await s.execute(select(Student).where(Student.user_id == target_user_id))).scalar_one_or_none()
+        if not target or target.role != "STUDENT" or not student:
+            await query.edit_message_text("این دانش‌آموز پیدا نشد.")
+            return
+        settings = await get_student_notification_settings(s, target_user_id)
+        await s.commit()
+        cls = await s.get(ClassRoom, student.class_id) if student.class_id else None
+        body = (
+            f"🔔 تنظیم اعلان‌های دانش‌آموز\n\n"
+            f"👤 نام: {target.name}\n"
+            f"🏫 کلاس: {cls.name if cls else 'ثبت نشده'}\n\n"
+            f"برای روشن یا خاموش کردن هر اعلان، دکمه مربوط را بزنید:"
+        )
+        markup = notification_settings_markup(target_user_id, settings)
+    await query.edit_message_text(body, reply_markup=markup)
+
+
+async def render_admin_notification_list(query):
+    async with SessionLocal() as s:
+        rows = (await s.execute(
+            select(User, Student, ClassRoom)
+            .join(Student, Student.user_id == User.id)
+            .join(ClassRoom, Student.class_id == ClassRoom.id, isouter=True)
+            .where(User.role == "STUDENT")
+            .order_by(User.name)
+            .limit(100)
+        )).all()
+    buttons = [
+        [InlineKeyboardButton(
+            f"{user.name or 'بدون نام'} — {cls.name if cls else 'بدون کلاس'}",
+            callback_data=f"adminnotify:student:{user.id}",
+            style="primary",
+        )]
+        for user, student, cls in rows
+    ]
+    buttons.append([InlineKeyboardButton("⚙️ بازگشت به پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
+    await query.edit_message_text(
+        "🔔 تنظیم اعلان‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def send_admin_notification_list(message):
+    async with SessionLocal() as s:
+        rows = (await s.execute(
+            select(User, ClassRoom)
+            .join(Student, Student.user_id == User.id)
+            .join(ClassRoom, Student.class_id == ClassRoom.id, isouter=True)
+            .where(User.role == "STUDENT")
+            .order_by(User.name)
+            .limit(100)
+        )).all()
+    buttons = [
+        [InlineKeyboardButton(
+            f"{user.name or 'بدون نام'} — {cls.name if cls else 'بدون کلاس'}",
+            callback_data=f"adminnotify:student:{user.id}",
+            style="primary",
+        )]
+        for user, cls in rows
+    ]
+    buttons.append([InlineKeyboardButton("⚙️ بازگشت به پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
+    await reply_long(
+        message,
+        "🔔 تنظیم اعلان‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def send_submission_list(message, assigner):
+    async with SessionLocal() as s:
+        class_ids = set((await s.execute(
+            select(Access.class_id).where(Access.assigner_user_id == assigner.id)
+        )).scalars().all())
+        rows = []
+        if class_ids:
+            rows = (await s.execute(
+                select(HomeworkSubmission, User, Student)
+                .join(User, HomeworkSubmission.student_user_id == User.id)
+                .join(Student, Student.user_id == User.id)
+                .where(
+                    HomeworkSubmission.status == "PENDING",
+                    HomeworkSubmission.class_id.in_(class_ids),
+                )
+                .order_by(HomeworkSubmission.created_at.desc())
+                .limit(40)
+            )).all()
+    buttons = [
+        [InlineKeyboardButton(
+            f"📝 #{sub.id} — {user.name or 'دانش‌آموز'}",
+            callback_data=f"submission:view:{sub.id}",
+            style="primary",
+        )]
+        for sub, user, student in rows
+    ]
+    buttons.append([InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")])
+    body = "📥 تکالیف عکس‌های در انتظار بررسی\n\nبرای دیدن تصاویر و مشخصات، یک مورد را انتخاب کنید."
+    if not rows:
+        body = "✅ در حال حاضر تکلیف تصویریِ در انتظار بررسی برای کلاس‌های شما وجود ندارد."
+    await reply_long(message, body, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def send_assigner_entry_alert(bot, assigner, chat_id):
+    async with SessionLocal() as s:
+        class_ids = set((await s.execute(
+            select(Access.class_id).where(Access.assigner_user_id == assigner.id)
+        )).scalars().all())
+        count = 0
+        if class_ids:
+            count = await s.scalar(
+                select(func.count(HomeworkSubmission.id)).where(
+                    HomeworkSubmission.status == "PENDING",
+                    HomeworkSubmission.class_id.in_(class_ids),
+                )
+            )
+    if count:
+        await bot.send_message(
+            chat_id,
+            f"🔔 یادآوری: {count} تکلیف تصویری هنوز بررسی نشده است.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📥 بررسی تکالیف عکس‌ها", callback_data="submission:list", style="primary")],
+                [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
+            ]),
+        )
+
+
+async def notify_assigners_submission(bot, submission_id: int, class_id: int, student_name: str):
+    async with SessionLocal() as s:
+        recipients = (await s.execute(
+            select(User).join(Access, Access.assigner_user_id == User.id)
+            .where(
+                Access.class_id == class_id,
+                User.role == "ASSIGNER",
+                User.active.is_(True),
+                User.telegram_id.is_not(None),
+            ).distinct()
+        )).scalars().all()
+    for recipient in recipients:
+        try:
+            await send_long(
+                bot,
+                recipient.telegram_id,
+                f"📥 تکلیف تصویری جدید از {student_name} ثبت شد.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "بازبینی تکلیف",
+                        callback_data=f"submission:view:{submission_id}",
+                        style="primary",
+                    )
+                ]]),
+            )
+        except Exception:
+            log.exception("submission alert failed for assigner %s", recipient.id)
+
+
+async def finalize_submission_review(bot, reviewer, submission_id: int, status: str, note: str = ""):
+    if status not in ("APPROVED", "REJECTED"):
+        raise ValueError("وضعیت بررسی معتبر نیست.")
+    async with SessionLocal() as s:
+        submission = await s.get(HomeworkSubmission, submission_id)
+        if not submission:
+            raise ValueError("تکلیف تصویری پیدا نشد.")
+        if submission.status != "PENDING":
+            raise ValueError("این تکلیف قبلاً بررسی شده است.")
+        if reviewer.role != "ASSIGNER":
+            raise ValueError("فقط تعیین‌کننده می‌تواند این تکلیف را بررسی کند.")
+        allowed = await s.scalar(select(Access.id).where(
+            Access.assigner_user_id == reviewer.id,
+            Access.class_id == submission.class_id,
+        ).limit(1))
+        if not allowed:
+            raise ValueError("این تکلیف مربوط به کلاس‌های مجاز شما نیست.")
+        student = await s.get(User, submission.student_user_id)
+        settings = await get_student_notification_settings(s, submission.student_user_id)
+        should_notify = bool(settings.responses_enabled)
+        submission.status = status
+        submission.review_note = note
+        submission.reviewed_by = reviewer.id
+        submission.reviewed_at = datetime.now(timezone.utc)
+        await s.commit()
+        telegram_id = student.telegram_id if student else None
+        student_name = student.name if student else "دانش‌آموز"
+    sent = False
+    if should_notify and telegram_id:
+        if status == "APPROVED":
+            message_text = f"✅ تکلیف تصویری شما تأیید شد.\\nشماره پیگیری: #{submission_id}"
+        else:
+            message_text = f"❌ تکلیف تصویری شما رد شد.\\nشماره پیگیری: #{submission_id}"
+            if note:
+                message_text += f"\\nتوضیح تعیین‌کننده: {note}"
+            message_text += "\\nلطفاً اصلاح کنید و دوباره ارسال کنید."
+        try:
+            await send_long(bot, telegram_id, message_text, reply_markup=back_to_panel_markup("STUDENT"))
+            sent = True
+        except Exception:
+            log.exception("submission result notification failed for %s", submission_id)
+    if sent:
+        async with SessionLocal() as s:
+            current = await s.get(HomeworkSubmission, submission_id)
+            if current:
+                current.student_notified = True
+                await s.commit()
+    await log_action(reviewer.id, "homework_submission_reviewed", f"{submission_id}|{status}")
+    return student_name
+
+
+async def send_student_entry_digest(bot, student_user):
+    now = datetime.now(timezone.utc)
+    digest_lines = ["🔔 پیام‌های تازه برای شما:"]
+    selected_announcements = []
+    selected_submissions = []
+    async with SessionLocal() as s:
+        student = (await s.execute(
+            select(Student).where(Student.user_id == student_user.id)
+        )).scalar_one_or_none()
+        if not student or not student.class_id or not student_user.telegram_id:
+            return
+        settings = await get_student_notification_settings(s, student_user.id)
+        cutoff = settings.last_digest_at or (now - timedelta(days=1))
+        announcements = (await s.execute(
+            select(Announcement).where(
+                Announcement.created_at > cutoff,
+                or_(Announcement.class_id.is_(None), Announcement.class_id == student.class_id),
+            ).order_by(Announcement.created_at.desc()).limit(20)
+        )).scalars().all()
+        for item in announcements:
+            field = announcement_notification_field(item)
+            if not getattr(settings, field):
+                continue
+            if item.kind == "announcement":
+                delivery = (await s.execute(select(Delivery).where(
+                    Delivery.announcement_id == item.id,
+                    Delivery.user_id == student_user.id,
+                ))).scalar_one_or_none()
+                if delivery and delivery.status == "SENT":
+                    continue
+            stamp = format_jalali_dt(item.scheduled_at) if item.kind == "tomorrow" and item.scheduled_at else ""
+            digest_lines.append(
+                f"\\n📌 {item.title}" + (f"\\n⏰ زمان: {stamp}" if stamp else "") + f"\\n{item.body}"
+            )
+            if item.kind == "announcement":
+                selected_announcements.append(item.id)
+        if settings.responses_enabled:
+            selected_submissions = (await s.execute(
+                select(HomeworkSubmission).where(
+                    HomeworkSubmission.student_user_id == student_user.id,
+                    HomeworkSubmission.status.in_(("APPROVED", "REJECTED")),
+                    HomeworkSubmission.student_notified.is_(False),
+                ).order_by(HomeworkSubmission.reviewed_at.desc()).limit(10)
+            )).scalars().all()
+            for item in selected_submissions:
+                label = "تأیید شد" if item.status == "APPROVED" else "رد شد"
+                digest_lines.append(
+                    f"\\n📝 نتیجه تکلیف تصویری #{item.id}: {label}"
+                    + (f"\\nتوضیح: {item.review_note}" if item.review_note else "")
+                )
+        should_send = len(digest_lines) > 1
+        if not should_send:
+            settings.last_digest_at = now
+            await s.commit()
+            return
+    try:
+        await send_long(bot, student_user.telegram_id, "\\n".join(digest_lines), reply_markup=back_to_panel_markup("STUDENT"))
+    except Exception:
+        log.exception("student entry digest failed for user %s", student_user.id)
+        return
+    async with SessionLocal() as s:
+        settings = await get_student_notification_settings(s, student_user.id)
+        settings.last_digest_at = now
+        for announcement_id in selected_announcements:
+            delivery = (await s.execute(select(Delivery).where(
+                Delivery.announcement_id == announcement_id,
+                Delivery.user_id == student_user.id,
+            ))).scalar_one_or_none()
+            if delivery is None:
+                s.add(Delivery(announcement_id=announcement_id, user_id=student_user.id, status="SENT", error=""))
+            else:
+                delivery.status, delivery.error = "SENT", ""
+        for item in selected_submissions:
+            current = await s.get(HomeworkSubmission, item.id)
+            if current:
+                current.student_notified = True
+        await s.commit()
 
 
 async def process_state(update, context, u):
@@ -2414,6 +2786,7 @@ async def init_db():
             # Widen the column without deleting or truncating existing data.
             await conn.execute(text("ALTER TABLE schedules ALTER COLUMN period TYPE TEXT USING period::text"))
             await conn.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"))
+            await conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"))
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS login_username VARCHAR(100)"))
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(300)"))
             await conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS school_code VARCHAR(80) DEFAULT ''"))
