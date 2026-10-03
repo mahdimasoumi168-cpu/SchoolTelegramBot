@@ -2414,9 +2414,7 @@ async def process_state(update, context, u):
             if not account.active:
                 await reply_long(update.message, "❌ این حساب توسط مدیریت غیرفعال شده است. برای فعال‌سازی با مدیریت مدرسه تماس بگیرید.")
                 return True
-            if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
-                await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
-                return True
+            
             account = await bind_telegram_account(s, account, update.effective_user.id)
             account.active = True
             account.name = st.login_name
@@ -2451,9 +2449,7 @@ async def process_state(update, context, u):
                 await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است. دوباره /start را بزنید.")
                 context.user_data.clear()
                 return True
-            if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
-                await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
-                return True
+            
             account = await bind_telegram_account(s, account, update.effective_user.id)
             account.active = True
             await s.commit()
@@ -2498,9 +2494,7 @@ async def process_state(update, context, u):
             if not account.active:
                 await reply_long(update.message, "❌ این حساب توسط مدیریت غیرفعال شده است. برای فعال‌سازی با مدیریت مدرسه تماس بگیرید.")
                 return True
-            if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
-                await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
-                return True
+            
             account = await bind_telegram_account(s, account, update.effective_user.id)
             account.active = True
             account.name = st.login_name
@@ -2535,9 +2529,7 @@ async def process_state(update, context, u):
             if not account or not verify_password(password, account.password_hash):
                 await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است.")
                 return True
-            if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
-                await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
-                return True
+            
             account = await bind_telegram_account(s, account, update.effective_user.id)
             await s.commit()
         context.user_data.clear()
