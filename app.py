@@ -746,6 +746,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                 context.user_data["submission_reject_id"] = sid
                 await reply_long(query.message, f"علت رد تکلیف #{sid} را بنویسید تا برای دانش‌آموز ارسال شود:", reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("رد بدون توضیح", callback_data=f"submission:reject_plain:{sid}", style="danger")],
+                    [InlineKeyboardButton("❌ انصراف", callback_data="menu:__CANCEL__", style="danger")],
                     [InlineKeyboardButton("↩️ بازگشت به فهرست", callback_data="submission:list", style="primary")],
                     [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
                 ]))
@@ -3052,7 +3053,14 @@ async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     u = await db_user(update.effective_user.id)
     state = context.user_data.get("state")
-    if not u or not u.active or u.role != "STUDENT" or state not in ("student_math_wait_photo", "student_math_more"):
+    if not u or not u.active or u.role != "STUDENT":
+        return
+    if state not in ("student_math_wait_photo", "student_math_more"):
+        await reply_long(
+            update.message,
+            "برای ارسال عکس تکلیف، ابتدا از پنل دانش‌آموز گزینه «ارسال تکالیف ریاضی سالمی» را انتخاب کنید.",
+            reply_markup=back_to_panel_markup("STUDENT"),
+        )
         return
     photos = context.user_data.setdefault("math_submission_photos", [])
     if len(photos) >= 10:
