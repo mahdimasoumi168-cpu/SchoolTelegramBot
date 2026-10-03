@@ -671,7 +671,16 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         action = parts[1] if len(parts) > 1 else ""
         if action == "list":
             context.user_data.clear()
-            await send_submission_list(query.message, u)
+            page = 0
+            if len(parts) == 3:
+                try:
+                    page = max(0, int(parts[2]))
+                except ValueError:
+                    await reply_long(query.message, "شماره صفحه نامعتبر است.", reply_markup=back_to_panel_markup("ASSIGNER"))
+                    return
+            await send_submission_list(query.message, u, page)
+            return
+        if action == "noop":
             return
         if action == "view" and len(parts) == 3:
             context.user_data.clear()
@@ -1800,13 +1809,25 @@ async def send_admin_notification_list(message, page: int = 0):
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
-async def send_submission_list(message, assigner):
+async def send_submission_list(message, assigner, page: int = 0):
+    """Paginated queue of pending photo homework for the determiner."""
+    page_size = 25
+    page = max(0, int(page))
     async with SessionLocal() as s:
         class_ids = set((await s.execute(
             select(Access.class_id).where(Access.assigner_user_id == assigner.id)
         )).scalars().all())
+        total = 0
         rows = []
         if class_ids:
+            total = await s.scalar(
+                select(func.count(HomeworkSubmission.id)).where(
+                    HomeworkSubmission.status == "PENDING",
+                    HomeworkSubmission.class_id.in_(class_ids),
+                )
+            )
+            max_page = max(0, (int(total or 0) - 1) // page_size)
+            page = min(page, max_page)
             rows = (await s.execute(
                 select(HomeworkSubmission, User, Student)
                 .join(User, HomeworkSubmission.student_user_id == User.id)
@@ -1816,8 +1837,12 @@ async def send_submission_list(message, assigner):
                     HomeworkSubmission.class_id.in_(class_ids),
                 )
                 .order_by(HomeworkSubmission.created_at.desc())
-                .limit(40)
+                .offset(page * page_size)
+                .limit(page_size)
             )).all()
+        else:
+            max_page = 0
+
     buttons = [
         [InlineKeyboardButton(
             f"📝 #{sub.id} — {user.name or 'دانش‌آموز'}",
@@ -1826,12 +1851,19 @@ async def send_submission_list(message, assigner):
         )]
         for sub, user, student in rows
     ]
+    if total:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"submission:list:{page-1}", style="primary"))
+        nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="submission:noop", style="secondary"))
+        if page < max_page:
+            nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"submission:list:{page+1}", style="primary"))
+        buttons.append(nav)
     buttons.append([InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")])
     body = "📥 تکالیف عکس‌های در انتظار بررسی\n\nبرای دیدن تصاویر و مشخصات، یک مورد را انتخاب کنید."
     if not rows:
         body = "✅ در حال حاضر تکلیف تصویریِ در انتظار بررسی برای کلاس‌های شما وجود ندارد."
     await reply_long(message, body, reply_markup=InlineKeyboardMarkup(buttons))
-
 
 async def send_assigner_entry_alert(bot, assigner, chat_id):
     async with SessionLocal() as s:
