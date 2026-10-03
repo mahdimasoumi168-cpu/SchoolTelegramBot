@@ -1888,7 +1888,10 @@ async def send_student_entry_digest(bot, student_user):
             field = announcement_notification_field(item)
             if not getattr(settings, field):
                 continue
-            if item.kind == "announcement":
+            # Scheduled "tomorrow" notices should not be sent before their due time.
+            if item.kind == "tomorrow" and item.scheduled_at and item.scheduled_at > now:
+                continue
+            if item.kind in ("announcement", "tomorrow"):
                 delivery = (await s.execute(select(Delivery).where(
                     Delivery.announcement_id == item.id,
                     Delivery.user_id == student_user.id,
@@ -1899,7 +1902,7 @@ async def send_student_entry_digest(bot, student_user):
             digest_lines.append(
                 f"\n📌 {item.title}" + (f"\n⏰ زمان: {stamp}" if stamp else "") + f"\n{item.body}"
             )
-            if item.kind == "announcement":
+            if item.kind in ("announcement", "tomorrow"):
                 selected_announcements.append(item.id)
         if settings.responses_enabled:
             selected_submissions = (await s.execute(
