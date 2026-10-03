@@ -3110,7 +3110,13 @@ async def _document_message_locked(update: Update, context: ContextTypes.DEFAULT
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    log.exception("Unhandled bot error", exc_info=context.error)
+    if context.error:
+        log.error(
+            "Unhandled bot error",
+            exc_info=(type(context.error), context.error, context.error.__traceback__),
+        )
+    else:
+        log.error("Unhandled bot error without exception details")
     if isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text(
