@@ -2003,6 +2003,66 @@ async def process_state(update, context, u):
         await panel(update, "عملیات لغو شد.")
         return True
 
+    # Explicit multi-step determiner note workflow. The old path treated the
+    # inline action as metadata and left the PDF handler with incomplete data.
+    if u and u.role == "ASSIGNER" and state == "assigner_note_title":
+        if text == "افزودن":
+            context.user_data["state"] = "assigner_note_subject"
+            async with SessionLocal() as s:
+                subjects = await allowed_subjects(s, u)
+            if not subjects:
+                context.user_data.clear()
+                await reply_long(update.message, "برای شما هیچ درس مجازی تعریف نشده است.", reply_markup=back_to_panel_markup("ASSIGNER"))
+            else:
+                names = sorted({x.name for x in subjects})
+                await reply_long(update.message, "نام درس جزوه را از میان درس‌های مجاز ارسال کنید:\n" + "\n".join("• " + n for n in names))
+            return True
+        if text == "حذف":
+            context.user_data["state"] = "assigner_note_delete_id"
+            await reply_long(update.message, "شناسه جزوه‌ای را که می‌خواهید حذف کنید ارسال کنید:")
+            return True
+        await reply_long(update.message, "لطفاً یکی از گزینه‌های «افزودن» یا «حذف» را انتخاب کنید.")
+        return True
+
+    if u and u.role == "ASSIGNER" and state == "assigner_note_subject":
+        async with SessionLocal() as s:
+            subjects = await allowed_subjects(s, u)
+        matches = [x for x in subjects if norm_name(x.name) == norm_name(text)]
+        if len(matches) != 1:
+            await reply_long(update.message, "این درس در دسترسی شما نیست یا نام آن مبهم است. یکی از درس‌های فهرست‌شده را دقیق ارسال کنید.")
+            return True
+        context.user_data["assigner_note_subject_id"] = matches[0].id
+        context.user_data["assigner_note_subject_name"] = matches[0].name
+        context.user_data["state"] = "assigner_note_title_input"
+        await reply_long(update.message, "عنوان جزوه را ارسال کنید:")
+        return True
+
+    if u and u.role == "ASSIGNER" and state == "assigner_note_title_input":
+        title = text.strip()
+        if not title:
+            await reply_long(update.message, "عنوان نمی‌تواند خالی باشد. دوباره ارسال کنید:")
+            return True
+        context.user_data["note_meta"] = [context.user_data.get("assigner_note_subject_name", ""), title]
+        context.user_data["state"] = "assigner_note_file"
+        await reply_long(update.message, "حالا فایل PDF جزوه را ارسال کنید.")
+        return True
+
+    if u and u.role == "ASSIGNER" and state == "assigner_note_delete_id":
+        try:
+            note_id = int(text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
+            async with SessionLocal() as s:
+                note = await s.get(Note, note_id)
+                allowed_ids = {x.id for x in await allowed_subjects(s, u)}
+                if not note or note.subject_id not in allowed_ids:
+                    raise ValueError("جزوه پیدا نشد یا به آن دسترسی ندارید.")
+                await s.delete(note)
+                await s.commit()
+            context.user_data.clear()
+            await reply_long(update.message, "✅ جزوه حذف شد.", reply_markup=keyboard(ASSIGNER_MENU))
+        except ValueError as e:
+            await reply_long(update.message, f"❌ {e}\nشناسه جزوه را دوباره ارسال کنید:")
+        return True
+
     if state in ("admin_note_file", "assigner_note_file"):
         await reply_long(update.message, "📎 لطفاً فایل جزوه را به‌صورت PDF ارسال کنید. برای لغو «انصراف» را بزنید.")
         return True
@@ -3001,11 +3061,6 @@ async def process_state(update, context, u):
                         except Exception:
                             log.exception("assigner question notification failed")
                     await reply_long(update.message, "پاسخ ثبت شد.")
-                elif state == "assigner_note_title":
-                    context.user_data["note_meta"] = [x.strip() for x in text.split("|", 1)]
-                    context.user_data["state"] = "assigner_note_file"
-                    await reply_long(update.message, "حالا فایل جزوه را ارسال کنید.")
-                    return True
         except Exception as e:
             await reply_long(update.message, f"❌ خطا: {e}")
         context.user_data.clear()
