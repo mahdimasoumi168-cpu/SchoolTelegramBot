@@ -776,7 +776,17 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             return
         action = parts[1] if len(parts) > 1 else ""
         if action == "list":
-            await render_admin_notification_list(query)
+            page = 0
+            if len(parts) == 3:
+                try:
+                    page = max(0, int(parts[2]))
+                except ValueError:
+                    await reply_long(query.message, "شماره صفحه نامعتبر است.")
+                    return
+            await render_admin_notification_list(query, page)
+            return
+        if action == "noop":
+            await query.answer("برای تغییر صفحه از دکمه‌های کناری استفاده کنید.")
             return
         if action == "student" and len(parts) == 3:
             try:
@@ -1695,16 +1705,27 @@ async def render_admin_notification_settings(query, target_user_id: int):
     await query.edit_message_text(body, reply_markup=markup)
 
 
-async def render_admin_notification_list(query):
+async def render_admin_notification_list(query, page: int = 0):
+    page_size = 25
+    page = max(0, int(page))
     async with SessionLocal() as s:
+        total = await s.scalar(
+            select(func.count(Student.user_id)).join(User, Student.user_id == User.id)
+            .where(User.role == "STUDENT")
+        )
         rows = (await s.execute(
             select(User, Student, ClassRoom)
             .join(Student, Student.user_id == User.id)
             .join(ClassRoom, Student.class_id == ClassRoom.id, isouter=True)
             .where(User.role == "STUDENT")
-            .order_by(User.name)
-            .limit(100)
+            .order_by(User.name, User.id)
+            .offset(page * page_size)
+            .limit(page_size)
         )).all()
+    max_page = max(0, (int(total or 0) - 1) // page_size)
+    if page > max_page:
+        page = max_page
+        return await render_admin_notification_list(query, page)
     buttons = [
         [InlineKeyboardButton(
             f"{user.name or 'بدون نام'} — {cls.name if cls else 'بدون کلاس'}",
@@ -1713,11 +1734,19 @@ async def render_admin_notification_list(query):
         )]
         for user, student, cls in rows
     ]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"adminnotify:list:{page-1}", style="primary"))
+    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="adminnotify:noop", style="secondary"))
+    if page < max_page:
+        nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"adminnotify:list:{page+1}", style="primary"))
+    if nav:
+        buttons.append(nav)
     buttons.append([InlineKeyboardButton("⚙️ بازگشت به پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
-    await query.edit_message_text(
-        "🔔 تنظیم اعلان‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:",
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
+    body = "🔔 تنظیم اعلان‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:"
+    if not rows:
+        body += "\n\nهنوز دانش‌آموزی ثبت نشده است."
+    await query.edit_message_text(body, reply_markup=InlineKeyboardMarkup(buttons))
 
 
 async def send_admin_notification_list(message):
