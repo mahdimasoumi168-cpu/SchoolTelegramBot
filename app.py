@@ -1899,7 +1899,13 @@ async def send_student_entry_digest(bot, student_user):
         cutoff = settings.last_digest_at or (now - timedelta(days=1))
         announcements = (await s.execute(
             select(Announcement).where(
-                Announcement.created_at > cutoff,
+                or_(
+                    Announcement.created_at > cutoff,
+                    Announcement.id.in_(select(Delivery.announcement_id).where(
+                        Delivery.user_id == student_user.id,
+                        Delivery.status.in_(("PENDING", "FAILED")),
+                    )),
+                ),
                 or_(Announcement.class_id.is_(None), Announcement.class_id == student.class_id),
             ).order_by(Announcement.created_at.desc()).limit(20)
         )).scalars().all()
