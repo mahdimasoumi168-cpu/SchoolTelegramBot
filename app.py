@@ -3054,6 +3054,11 @@ async def _message_locked(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.effective_user:
         return
+    async with get_user_lock(update.effective_user.id):
+        return await _photo_message_locked(update, context)
+
+
+async def _photo_message_locked(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = await db_user(update.effective_user.id)
     state = context.user_data.get("state")
     if not u or not u.active or u.role != "STUDENT":
