@@ -104,6 +104,15 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class UserTelegramAccount(Base):
+    __tablename__ = "user_telegram_accounts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    __table_args__ = (UniqueConstraint("user_id", "telegram_id", name="uq_user_telegram_account"),)
+
+
 class ClassRoom(Base):
     __tablename__ = "classes"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -244,6 +253,20 @@ class StudentNotificationSettings(Base):
     last_digest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class StudentPermissionSettings(Base):
+    __tablename__ = "student_permission_settings"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    lessons_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    assignments_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    exams_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    announcements_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    questions_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    account_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    tomorrow_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    math_homework_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
 STUDENT_MENU = [
     ["👨‍🎓 پنل دانش‌آموز", "📚 درس‌های من"],
     ["📝 تکالیف", "📅 برنامه هفتگی"],
@@ -253,6 +276,51 @@ STUDENT_MENU = [
     ["📸 ارسال تکالیف ریاضی سالمی"],
     ["🚪 خروج"],
 ]
+STUDENT_PERMISSION_FIELDS = {
+    "📚 درس‌های من": "lessons_enabled",
+    "📝 تکالیف": "assignments_enabled",
+    "📅 برنامه هفتگی": "schedule_enabled",
+    "📝 امتحانات": "exams_enabled",
+    "📢 اطلاعیه‌ها": "announcements_enabled",
+    "❓ سؤال": "questions_enabled",
+    "👤 حساب کاربری": "account_enabled",
+    "📖 جزوات": "notes_enabled",
+    "🔔 اطلاعیه فردا": "tomorrow_enabled",
+    "📸 ارسال تکالیف ریاضی سالمی": "math_homework_enabled",
+}
+STUDENT_PERMISSION_LABELS = list(STUDENT_PERMISSION_FIELDS.keys())
+
+def student_menu_rows(enabled_fields: set[str]):
+    rows = []
+    for row in STUDENT_MENU:
+        filtered = [label for label in row if label in ("👨‍🎓 پنل دانش‌آموز", "🚪 خروج") or (label in STUDENT_PERMISSION_FIELDS and STUDENT_PERMISSION_FIELDS[label] in enabled_fields)]
+        if filtered:
+            rows.append(filtered)
+    return rows
+
+async def get_student_enabled_fields(user_id: int) -> set[str]:
+    async with SessionLocal() as s:
+        settings = await s.get(StudentPermissionSettings, user_id)
+        if not settings:
+            return set(STUDENT_PERMISSION_FIELDS.values())
+        return {field for field in STUDENT_PERMISSION_FIELDS.values() if bool(getattr(settings, field, True))}
+
+async def student_menu_markup(user_id: int):
+    return keyboard(student_menu_rows(await get_student_enabled_fields(user_id)))
+
+async def student_permission_allowed(user_id: int, label: str) -> bool:
+    field = STUDENT_PERMISSION_FIELDS.get(label)
+    return True if not field else field in await get_student_enabled_fields(user_id)
+
+async def ensure_student_permission_settings(session, user_id: int):
+    settings = await session.get(StudentPermissionSettings, user_id)
+    if not settings:
+        settings = StudentPermissionSettings(user_id=user_id)
+        session.add(settings)
+        await session.flush()
+    return settings
+
+
 
 ASSIGNER_MENU = [
     ["👤 پنل تعیین‌کننده", "👨‍🎓 دانش‌آموزان"],
@@ -278,6 +346,7 @@ ADMIN_MENU = [
     ["🕐 تاریخچه تغییرات", "⚙️ تنظیمات بات"],
     ["🗄️ مدیریت دیتابیس", "🔒 تنظیمات امنیتی"],
     ["🔔 تنظیم اعلان‌های دانش‌آموزان"],
+    ["🎛️ تنظیم دکمه‌های دانش‌آموزان"],
     ["🚪 خروج"],
 ]
 
@@ -285,25 +354,37 @@ ROLE_NAMES = {"STUDENT": "دانش‌آموز", "ASSIGNER": "تعیین‌کنن
 
 
 async def bind_telegram_account(session, account, telegram_id: int):
-    """Safely bind Telegram and release a stale/non-admin binding from another account."""
-    locked = await session.scalar(
-        select(User).where(User.id == account.id).with_for_update()
-    )
+    """Allow one school account to be used from multiple Telegram accounts."""
+    locked = await session.scalar(select(User).where(User.id == account.id).with_for_update())
     if locked is None:
         raise ValueError("حساب کاربری پیدا نشد.")
-    if locked.telegram_id is not None and locked.telegram_id != telegram_id:
-        raise ValueError("این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
 
     owner = await session.scalar(
+        select(UserTelegramAccount).where(UserTelegramAccount.telegram_id == telegram_id).with_for_update()
+    )
+    if owner is not None and owner.user_id != locked.id:
+        raise ValueError("این حساب تلگرام قبلاً برای یک حساب کاربری دیگر ثبت شده است.")
+
+    legacy_owner = await session.scalar(
         select(User).where(User.telegram_id == telegram_id).with_for_update()
     )
-    if owner is not None and owner.id != locked.id:
-        if owner.role == "ADMIN":
-            raise ValueError("این حساب تلگرام به حساب مدیریت اصلی متصل است و قابل جابه‌جایی نیست.")
-        owner.telegram_id = None
+    if legacy_owner is not None and legacy_owner.id != locked.id:
+        raise ValueError("این حساب تلگرام قبلاً برای یک حساب کاربری دیگر ثبت شده است.")
 
-    locked.telegram_id = telegram_id
+    link = await session.scalar(
+        select(UserTelegramAccount).where(
+            UserTelegramAccount.user_id == locked.id,
+            UserTelegramAccount.telegram_id == telegram_id,
+        )
+    )
+    if link is None:
+        session.add(UserTelegramAccount(user_id=locked.id, telegram_id=telegram_id))
+
+    # Keep the legacy field populated for compatibility with existing data/code.
+    if locked.telegram_id is None:
+        locked.telegram_id = telegram_id
     return locked
+
 
 
 def norm_name(value: str) -> str:
@@ -411,7 +492,10 @@ def navigation_markup():
     ])
 
 async def reply_panel_text(message, text: str, user):
-    await reply_long(message, text, reply_markup=back_to_panel_markup(user.role))
+    if user.role == "STUDENT":
+        await reply_long(message, text, reply_markup=await student_menu_markup(user.id))
+    else:
+        await reply_long(message, text, reply_markup=back_to_panel_markup(user.role))
 
 async def reply_long(message, text: str, **kwargs):
     """Send text safely within Telegram's 4096-character message limit."""
@@ -461,6 +545,14 @@ def callback_update(query, text):
 
 async def db_user(tg_id: int) -> User | None:
     async with SessionLocal() as s:
+        linked = (await s.execute(
+            select(User)
+            .join(UserTelegramAccount, UserTelegramAccount.user_id == User.id)
+            .where(UserTelegramAccount.telegram_id == tg_id)
+        )).scalar_one_or_none()
+        if linked is not None:
+            return linked
+        # Backward compatibility for users created before multi-account login.
         return (await s.execute(select(User).where(User.telegram_id == tg_id))).scalar_one_or_none()
 
 
@@ -484,7 +576,7 @@ async def panel(update: Update, text: str = "منوی پنل:"):
     elif u.role == "ASSIGNER":
         await reply_long(update.message, text, reply_markup=keyboard(ASSIGNER_MENU))
     elif u.role == "STUDENT":
-        await reply_long(update.message, text, reply_markup=keyboard(STUDENT_MENU))
+        await reply_long(update.message, text, reply_markup=await student_menu_markup(u.id))
     else:
         await reply_long(update.message, "حساب شما هنوز توسط مدیریت تأیید نشده است.", reply_markup=ReplyKeyboardRemove())
 
@@ -671,7 +763,16 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         action = parts[1] if len(parts) > 1 else ""
         if action == "list":
             context.user_data.clear()
-            await send_submission_list(query.message, u)
+            page = 0
+            if len(parts) == 3:
+                try:
+                    page = max(0, int(parts[2]))
+                except ValueError:
+                    await reply_long(query.message, "شماره صفحه نامعتبر است.", reply_markup=back_to_panel_markup("ASSIGNER"))
+                    return
+            await send_submission_list(query.message, u, page)
+            return
+        if action == "noop":
             return
         if action == "view" and len(parts) == 3:
             context.user_data.clear()
@@ -768,6 +869,56 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             return
         return
 
+    if data.startswith("studentperm:"):
+        parts = data.split(":")
+        u = await db_user(query.from_user.id)
+        if not u or not u.active or u.role != "ADMIN":
+            await reply_long(query.message, "فقط مدیریت می‌تواند دکمه‌های دانش‌آموزان را تنظیم کند.")
+            return
+        action = parts[1] if len(parts) > 1 else ""
+        if action == "noop": return
+        if action == "list":
+            page = 0
+            if len(parts) == 3:
+                try: page = max(0, int(parts[2]))
+                except ValueError:
+                    await reply_long(query.message, "شماره صفحه نامعتبر است.")
+                    return
+            await render_admin_student_permission_list(query.message, page)
+            return
+        if action == "student" and len(parts) == 3:
+            try: target_id = int(parts[2])
+            except ValueError:
+                await reply_long(query.message, "شناسه دانش‌آموز نامعتبر است.")
+                return
+            await render_admin_student_permission_settings(query, target_id)
+            return
+        if action in ("toggle", "all") and len(parts) == 4:
+            try: target_id = int(parts[2])
+            except ValueError:
+                await reply_long(query.message, "شناسه دانش‌آموز نامعتبر است.")
+                return
+            async with SessionLocal() as s:
+                target = await s.get(User, target_id)
+                if not target or target.role != "STUDENT":
+                    await reply_long(query.message, "دانش‌آموز پیدا نشد.")
+                    return
+                settings = await ensure_student_permission_settings(s, target_id)
+                if action == "toggle":
+                    field = parts[3]
+                    if field not in STUDENT_PERMISSION_FIELDS.values():
+                        await reply_long(query.message, "دسترسی نامعتبر است.")
+                        return
+                    setattr(settings, field, not bool(getattr(settings, field)))
+                else:
+                    if parts[3] not in ("on", "off"): return
+                    enabled = parts[3] == "on"
+                    for field in STUDENT_PERMISSION_FIELDS.values(): setattr(settings, field, enabled)
+                await s.commit()
+            await render_admin_student_permission_settings(query, target_id)
+            return
+        return
+
     if data.startswith("adminnotify:"):
         parts = data.split(":")
         u = await db_user(query.from_user.id)
@@ -776,7 +927,16 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             return
         action = parts[1] if len(parts) > 1 else ""
         if action == "list":
-            await render_admin_notification_list(query)
+            page = 0
+            if len(parts) == 3:
+                try:
+                    page = max(0, int(parts[2]))
+                except ValueError:
+                    await reply_long(query.message, "شماره صفحه نامعتبر است.")
+                    return
+            await render_admin_notification_list(query, page)
+            return
+        if action == "noop":
             return
         if action == "student" and len(parts) == 3:
             try:
@@ -830,7 +990,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             menu_map = {
                 "ADMIN": ("⚙️ پنل مدیریت", ADMIN_MENU),
                 "ASSIGNER": ("👤 پنل تعیین‌کننده", ASSIGNER_MENU),
-                "STUDENT": ("👨‍🎓 پنل دانش‌آموز", STUDENT_MENU),
+                "STUDENT": ("👨‍🎓 پنل دانش‌آموز", student_menu_rows(await get_student_enabled_fields(u.id))),
             }
             title, menu_rows = menu_map[u.role]
             await reply_long(query.message, "🔄 سامانه از ابتدا آماده شد.\n" + title, reply_markup=keyboard(menu_rows))
@@ -858,7 +1018,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         elif u.role == "ASSIGNER":
             await reply_long(query.message, "❌ عملیات لغو شد.\n👤 پنل تعیین‌کننده", reply_markup=keyboard(ASSIGNER_MENU))
         else:
-            await reply_long(query.message, "❌ عملیات لغو شد.\n👨‍🎓 پنل دانش‌آموز", reply_markup=keyboard(STUDENT_MENU))
+            await reply_long(query.message, "❌ عملیات لغو شد.\n👨‍🎓 پنل دانش‌آموز", reply_markup=await student_menu_markup(u.id))
         return
     if text == "__BACK_PANEL__":
         context.user_data.clear()
@@ -882,6 +1042,9 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         await logout(callback_update(query, text), context)
         return
     if u.role == "STUDENT" and text == "❓ سؤال":
+        if not await student_permission_allowed(u.id, text):
+            await reply_long(query.message, "⛔ این گزینه برای حساب شما توسط مدیریت غیرفعال شده است.", reply_markup=await student_menu_markup(u.id))
+            return
         context.user_data["state"] = "student_question_text"
         await reply_long(query.message, "❓ سؤال\n\nمتن سؤال را در پیام بعدی ارسال کنید. نیازی به انتخاب درس یا کلاس نیست؛ سامانه اطلاعات حساب شما را خودش در نظر می‌گیرد. برای لغو «انصراف».")
         return
@@ -895,27 +1058,42 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tg_id = update.effective_user.id
     async with SessionLocal() as s:
-        u = (await s.execute(select(User).where(User.telegram_id == update.effective_user.id))).scalar_one_or_none()
+        u = (await s.execute(
+            select(User).join(UserTelegramAccount, UserTelegramAccount.user_id == User.id)
+            .where(UserTelegramAccount.telegram_id == tg_id)
+        )).scalar_one_or_none()
+        if u is None:
+            u = await s.scalar(select(User).where(User.telegram_id == tg_id))
         if u:
-            # "active" is an account permission controlled by management, not
-            # a login-session flag. Logout only releases the Telegram binding.
-            # Keep the admin binding because ADMIN_TELEGRAM_ID is canonical.
-            if u.role != "ADMIN":
-                u.telegram_id = None
+            await s.execute(delete(UserTelegramAccount).where(
+                UserTelegramAccount.user_id == u.id,
+                UserTelegramAccount.telegram_id == tg_id,
+            ))
+            if u.telegram_id == tg_id:
+                u.telegram_id = await s.scalar(
+                    select(UserTelegramAccount.telegram_id)
+                    .where(UserTelegramAccount.user_id == u.id)
+                    .order_by(UserTelegramAccount.id)
+                )
             await s.commit()
     context.user_data.clear()
     await reply_long(
         update.message,
-        "با موفقیت خارج شدید. برای ورود دوباره دکمه زیر را بزنید:",
+        "با موفقیت از این حساب تلگرام خارج شدید. حساب‌های تلگرامی دیگر شما همچنان متصل می‌مانند.",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("🔄 شروع مجدد / ورود دوباره", callback_data="menu:__RESTART__", style="success")
         ]]),
     )
 
 
+
 async def show_student(update, u, context=None):
     t = update.message.text
+    if t not in ("👨‍🎓 پنل دانش‌آموز", "🚪 خروج") and not await student_permission_allowed(u.id, t):
+        await reply_long(update.message, "⛔ این گزینه برای حساب شما توسط مدیریت غیرفعال شده است.", reply_markup=await student_menu_markup(u.id))
+        return
     if t == "👨‍🎓 پنل دانش‌آموز":
         await send_student_entry_digest(context.bot, u)
         await reply_panel_text(update.message, "👨‍🎓 پنل دانش‌آموز آماده است. از گزینه‌های زیر استفاده کنید.", u)
@@ -1342,7 +1520,9 @@ async def show_admin(update, context, u):
         context.user_data["state"] = "admin_subject"
         await reply_long(update.message, "📚 مدیریت درس‌ها\n\nاز دکمه‌های زیر یکی را انتخاب کنید: «افزودن»، «ویرایش» یا «حذف»؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
     elif t == "🔔 تنظیم اعلان‌های دانش‌آموزان":
-        await send_admin_notification_list(update.message)
+        await send_admin_notification_list(update.message, 0)
+    elif t == "🎛️ تنظیم دکمه‌های دانش‌آموزان":
+        await render_admin_student_permission_list(update.message, 0)
     elif t == "🔐 مدیریت دسترسی‌ها":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
@@ -1609,7 +1789,9 @@ async def create_announcement(bot, title, body, class_id, kind, scheduled_at, cr
             a = await s.get(Announcement, aid)
             failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == aid, Delivery.status.in_(("PENDING", "FAILED"))).limit(1))
             delivered = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == aid).limit(1))
-            if a and (delivered is None or failed is None):
+            # Mark as sent only when there are no pending/failed deliveries.
+            # A single Telegram failure must remain retryable.
+            if a and failed is None:
                 a.sent = True
             await s.commit()
     return aid
@@ -1625,7 +1807,9 @@ async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
             x = await s.get(Announcement, a.id)
             failed = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == a.id, Delivery.status.in_(("PENDING", "FAILED"))).limit(1))
             delivered = await s.scalar(select(Delivery.id).where(Delivery.announcement_id == a.id).limit(1))
-            if x and (delivered is None or failed is None):
+            # Keep the announcement unsent when any recipient failed;
+            # the next scheduler run can retry it.
+            if x and failed is None:
                 x.sent = True
                 await s.commit()
 
@@ -1675,6 +1859,43 @@ def notification_settings_markup(user_id, settings):
     return InlineKeyboardMarkup(rows)
 
 
+async def render_admin_student_permission_list(message, page: int = 0):
+    page_size = 25
+    page = max(0, int(page))
+    async with SessionLocal() as s:
+        total = await s.scalar(select(func.count(Student.user_id)).join(User, Student.user_id == User.id).where(User.role == "STUDENT"))
+        max_page = max(0, (int(total or 0) - 1) // page_size)
+        page = min(page, max_page)
+        rows = (await s.execute(select(User, Student, ClassRoom).join(Student, Student.user_id == User.id).join(ClassRoom, Student.class_id == ClassRoom.id, isouter=True).where(User.role == "STUDENT").order_by(User.name, User.id).offset(page * page_size).limit(page_size))).all()
+    buttons = [[InlineKeyboardButton(f"{user.name or 'بدون نام'} — {cls.name if cls else 'بدون کلاس'}", callback_data=f"studentperm:student:{user.id}", style="primary")] for user, student, cls in rows]
+    nav = []
+    if page > 0: nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"studentperm:list:{page-1}", style="primary"))
+    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="studentperm:noop", style="secondary"))
+    if page < max_page: nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"studentperm:list:{page+1}", style="primary"))
+    if nav: buttons.append(nav)
+    buttons.append([InlineKeyboardButton("⚙️ بازگشت به پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
+    body = "🎛️ تنظیم دکمه‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:"
+    if not rows: body += "\n\nهنوز دانش‌آموزی ثبت نشده است."
+    await reply_long(message, body, reply_markup=InlineKeyboardMarkup(buttons))
+
+async def render_admin_student_permission_settings(query, target_user_id: int):
+    async with SessionLocal() as s:
+        target = await s.get(User, target_user_id)
+        if not target or target.role != "STUDENT":
+            await reply_long(query.message, "❌ دانش‌آموز پیدا نشد.")
+            return
+        settings = await s.get(StudentPermissionSettings, target_user_id)
+        values = {field: bool(getattr(settings, field, True)) if settings else True for field in STUDENT_PERMISSION_FIELDS.values()}
+    buttons = []
+    for label, field in STUDENT_PERMISSION_FIELDS.items():
+        enabled = values[field]
+        buttons.append([InlineKeyboardButton(f"{'🟢 فعال' if enabled else '🔴 غیرفعال'} — {label}", callback_data=f"studentperm:toggle:{target_user_id}:{field}", style="success" if enabled else "danger")])
+    buttons.append([InlineKeyboardButton("✅ فعال‌سازی همه", callback_data=f"studentperm:all:{target_user_id}:on", style="success"), InlineKeyboardButton("⛔ غیرفعال‌سازی همه", callback_data=f"studentperm:all:{target_user_id}:off", style="danger")])
+    buttons.append([InlineKeyboardButton("⬅️ انتخاب دانش‌آموز", callback_data="studentperm:list:0", style="primary")])
+    buttons.append([InlineKeyboardButton("⚙️ پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
+    body = f"🎛️ تنظیم دکمه‌های دانش‌آموز\n\n👨‍🎓 {target.name or 'بدون نام'}\n\nبا انتخاب هر گزینه، همان دکمه برای این دانش‌آموز فعال یا غیرفعال می‌شود."
+    await query.edit_message_text(body, reply_markup=InlineKeyboardMarkup(buttons))
+
 async def render_admin_notification_settings(query, target_user_id: int):
     async with SessionLocal() as s:
         target = await s.get(User, target_user_id)
@@ -1695,16 +1916,27 @@ async def render_admin_notification_settings(query, target_user_id: int):
     await query.edit_message_text(body, reply_markup=markup)
 
 
-async def render_admin_notification_list(query):
+async def render_admin_notification_list(query, page: int = 0):
+    page_size = 25
+    page = max(0, int(page))
     async with SessionLocal() as s:
+        total = await s.scalar(
+            select(func.count(Student.user_id)).join(User, Student.user_id == User.id)
+            .where(User.role == "STUDENT")
+        )
         rows = (await s.execute(
             select(User, Student, ClassRoom)
             .join(Student, Student.user_id == User.id)
             .join(ClassRoom, Student.class_id == ClassRoom.id, isouter=True)
             .where(User.role == "STUDENT")
-            .order_by(User.name)
-            .limit(100)
+            .order_by(User.name, User.id)
+            .offset(page * page_size)
+            .limit(page_size)
         )).all()
+    max_page = max(0, (int(total or 0) - 1) // page_size)
+    if page > max_page:
+        page = max_page
+        return await render_admin_notification_list(query, page)
     buttons = [
         [InlineKeyboardButton(
             f"{user.name or 'بدون نام'} — {cls.name if cls else 'بدون کلاس'}",
@@ -1713,23 +1945,42 @@ async def render_admin_notification_list(query):
         )]
         for user, student, cls in rows
     ]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"adminnotify:list:{page-1}", style="primary"))
+    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="adminnotify:noop", style="secondary"))
+    if page < max_page:
+        nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"adminnotify:list:{page+1}", style="primary"))
+    if nav:
+        buttons.append(nav)
     buttons.append([InlineKeyboardButton("⚙️ بازگشت به پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
-    await query.edit_message_text(
-        "🔔 تنظیم اعلان‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:",
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
+    body = "🔔 تنظیم اعلان‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:"
+    if not rows:
+        body += "\n\nهنوز دانش‌آموزی ثبت نشده است."
+    await query.edit_message_text(body, reply_markup=InlineKeyboardMarkup(buttons))
 
 
-async def send_admin_notification_list(message):
+async def send_admin_notification_list(message, page: int = 0):
+    """Show a paginated student picker for notification settings."""
+    page_size = 25
+    page = max(0, int(page))
     async with SessionLocal() as s:
+        total = await s.scalar(
+            select(func.count(Student.user_id)).join(User, Student.user_id == User.id)
+            .where(User.role == "STUDENT")
+        )
+        max_page = max(0, (int(total or 0) - 1) // page_size)
+        page = min(page, max_page)
         rows = (await s.execute(
             select(User, ClassRoom)
             .join(Student, Student.user_id == User.id)
             .join(ClassRoom, Student.class_id == ClassRoom.id, isouter=True)
             .where(User.role == "STUDENT")
-            .order_by(User.name)
-            .limit(100)
+            .order_by(User.name, User.id)
+            .offset(page * page_size)
+            .limit(page_size)
         )).all()
+
     buttons = [
         [InlineKeyboardButton(
             f"{user.name or 'بدون نام'} — {cls.name if cls else 'بدون کلاس'}",
@@ -1738,21 +1989,44 @@ async def send_admin_notification_list(message):
         )]
         for user, cls in rows
     ]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"adminnotify:list:{page-1}", style="primary"))
+    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="adminnotify:noop", style="secondary"))
+    if page < max_page:
+        nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"adminnotify:list:{page+1}", style="primary"))
+    if nav:
+        buttons.append(nav)
     buttons.append([InlineKeyboardButton("⚙️ بازگشت به پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
+
+    body = "🔔 تنظیم اعلان‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:"
+    if not rows:
+        body += "\n\nهنوز دانش‌آموزی ثبت نشده است."
     await reply_long(
         message,
-        "🔔 تنظیم اعلان‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:",
+        body,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
-
-async def send_submission_list(message, assigner):
+async def send_submission_list(message, assigner, page: int = 0):
+    """Paginated queue of pending photo homework for the determiner."""
+    page_size = 25
+    page = max(0, int(page))
     async with SessionLocal() as s:
         class_ids = set((await s.execute(
             select(Access.class_id).where(Access.assigner_user_id == assigner.id)
         )).scalars().all())
+        total = 0
         rows = []
         if class_ids:
+            total = await s.scalar(
+                select(func.count(HomeworkSubmission.id)).where(
+                    HomeworkSubmission.status == "PENDING",
+                    HomeworkSubmission.class_id.in_(class_ids),
+                )
+            )
+            max_page = max(0, (int(total or 0) - 1) // page_size)
+            page = min(page, max_page)
             rows = (await s.execute(
                 select(HomeworkSubmission, User, Student)
                 .join(User, HomeworkSubmission.student_user_id == User.id)
@@ -1762,8 +2036,12 @@ async def send_submission_list(message, assigner):
                     HomeworkSubmission.class_id.in_(class_ids),
                 )
                 .order_by(HomeworkSubmission.created_at.desc())
-                .limit(40)
+                .offset(page * page_size)
+                .limit(page_size)
             )).all()
+        else:
+            max_page = 0
+
     buttons = [
         [InlineKeyboardButton(
             f"📝 #{sub.id} — {user.name or 'دانش‌آموز'}",
@@ -1772,12 +2050,19 @@ async def send_submission_list(message, assigner):
         )]
         for sub, user, student in rows
     ]
+    if total:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"submission:list:{page-1}", style="primary"))
+        nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="submission:noop", style="secondary"))
+        if page < max_page:
+            nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"submission:list:{page+1}", style="primary"))
+        buttons.append(nav)
     buttons.append([InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")])
     body = "📥 تکالیف عکس‌های در انتظار بررسی\n\nبرای دیدن تصاویر و مشخصات، یک مورد را انتخاب کنید."
     if not rows:
         body = "✅ در حال حاضر تکلیف تصویریِ در انتظار بررسی برای کلاس‌های شما وجود ندارد."
     await reply_long(message, body, reply_markup=InlineKeyboardMarkup(buttons))
-
 
 async def send_assigner_entry_alert(bot, assigner, chat_id):
     async with SessionLocal() as s:
@@ -2129,9 +2414,7 @@ async def process_state(update, context, u):
             if not account.active:
                 await reply_long(update.message, "❌ این حساب توسط مدیریت غیرفعال شده است. برای فعال‌سازی با مدیریت مدرسه تماس بگیرید.")
                 return True
-            if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
-                await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
-                return True
+            
             account = await bind_telegram_account(s, account, update.effective_user.id)
             account.active = True
             account.name = st.login_name
@@ -2166,9 +2449,7 @@ async def process_state(update, context, u):
                 await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است. دوباره /start را بزنید.")
                 context.user_data.clear()
                 return True
-            if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
-                await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
-                return True
+            
             account = await bind_telegram_account(s, account, update.effective_user.id)
             account.active = True
             await s.commit()
@@ -2213,15 +2494,17 @@ async def process_state(update, context, u):
             if not account.active:
                 await reply_long(update.message, "❌ این حساب توسط مدیریت غیرفعال شده است. برای فعال‌سازی با مدیریت مدرسه تماس بگیرید.")
                 return True
-            if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
-                await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
-                return True
+            
             account = await bind_telegram_account(s, account, update.effective_user.id)
             account.active = True
             account.name = st.login_name
             await s.commit()
         context.user_data.clear()
         await log_action(account.id, "student_login", code)
+        # A successful login is also an entry to the student panel: deliver
+        # unread announcements, tomorrow notices, question answers, and
+        # homework-review results immediately, respecting per-student settings.
+        await send_student_entry_digest(context.bot, account)
         await panel(update, f"سلام {account.name} 👋\nورود با موفقیت انجام شد.\n🏫 کد مدرسه: {code}")
         return True
 
@@ -2246,9 +2529,7 @@ async def process_state(update, context, u):
             if not account or not verify_password(password, account.password_hash):
                 await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است.")
                 return True
-            if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
-                await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
-                return True
+            
             account = await bind_telegram_account(s, account, update.effective_user.id)
             await s.commit()
         context.user_data.clear()
@@ -2569,7 +2850,9 @@ async def process_state(update, context, u):
                         exists=await s.scalar(select(Student.id).where(Student.school_code==school_code,Student.login_name==norm_name(name)).limit(1))
                         if exists: raise ValueError("این دانش‌آموز قبلاً ثبت شده است.")
                         target=User(telegram_id=None,name=name,role="STUDENT",active=True); s.add(target); await s.flush()
-                        s.add(Student(user_id=target.id,class_id=c0.id,school_code=school_code,login_name=norm_name(name))); await s.commit()
+                        s.add(Student(user_id=target.id,class_id=c0.id,school_code=school_code,login_name=norm_name(name)))
+                        s.add(StudentPermissionSettings(user_id=target.id))
+                        await s.commit()
                         await log_action(u.id,"student_provisioned",f"{school_code}|{name}|{c0.name}"); await reply_long(update.message, "✅ حساب دانش‌آموز ثبت شد.")
                     elif p[0]=="ویرایش" and len(p)==5:
                         st=await s.get(Student,int(p[1])); c0=await get_class_by_name(s,p[4])
@@ -2583,7 +2866,9 @@ async def process_state(update, context, u):
                     elif p[0]=="حذف" and len(p)==2:
                         st=await s.get(Student,int(p[1]))
                         if not st: raise ValueError("دانش‌آموز پیدا نشد.")
-                        target=await s.get(User,st.user_id); await s.delete(st)
+                        target=await s.get(User,st.user_id)
+                        await s.execute(delete(StudentPermissionSettings).where(StudentPermissionSettings.user_id == st.user_id))
+                        await s.delete(st)
                         if target: target.role,target.active,target.telegram_id="PENDING",False,None
                         await s.commit(); await reply_long(update.message, "✅ دانش‌آموز حذف و حساب او غیرفعال شد.")
                     else: raise ValueError("فرمت: افزودن|کد مدرسه|نام|کلاس / ویرایش|شناسه|کد|نام|کلاس / حذف|شناسه")
@@ -3261,7 +3546,7 @@ def main():
         .build()
     )
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:|note_date:|action:|mathsub:|submission:|adminnotify:)"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:|note_date:|action:|mathsub:|submission:|adminnotify:|studentperm:)"))
     app.add_handler(MessageHandler(filters.PHOTO, photo_message))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
