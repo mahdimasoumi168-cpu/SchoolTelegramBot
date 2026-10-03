@@ -562,11 +562,9 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with SessionLocal() as s:
         u = (await s.execute(select(User).where(User.telegram_id == update.effective_user.id))).scalar_one_or_none()
         if u:
-            u.active = False
-            # Release the Telegram binding on explicit logout so the same
-            # Telegram account can later log into another provisioned account.
-            # Keep the admin binding because ADMIN_TELEGRAM_ID is the canonical
-            # identity for the administrator.
+            # "active" is an account permission controlled by management, not
+            # a login-session flag. Logout only releases the Telegram binding.
+            # Keep the admin binding because ADMIN_TELEGRAM_ID is canonical.
             if u.role != "ADMIN":
                 u.telegram_id = None
             await s.commit()
@@ -1285,6 +1283,9 @@ async def process_state(update, context, u):
                 await reply_long(update.message, "❌ اطلاعات ورود پیدا نشد. کد مدرسه یا نام را بررسی کنید.")
                 return True
             st, account = rows[0]
+            if not account.active:
+                await reply_long(update.message, "❌ این حساب توسط مدیریت غیرفعال شده است. برای فعال‌سازی با مدیریت مدرسه تماس بگیرید.")
+                return True
             if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
                 await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
                 return True
@@ -1315,7 +1316,7 @@ async def process_state(update, context, u):
             return True
         async with SessionLocal() as s:
             account = (await s.execute(
-                select(User).where(User.login_username == username, User.role == "ASSIGNER")
+                select(User).where(User.login_username == username, User.role == "ASSIGNER", User.active.is_(True))
             )).scalar_one_or_none()
             if not account or not verify_password(password, account.password_hash):
                 await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است. دوباره /start را بزنید.")
@@ -1364,6 +1365,9 @@ async def process_state(update, context, u):
                 await reply_long(update.message, "❌ اطلاعات ورود پیدا نشد. کد مدرسه و نام را دقیقاً مطابق اطلاعات ثبت‌شده توسط مدیریت وارد کنید.")
                 return True
             st, account = rows[0]
+            if not account.active:
+                await reply_long(update.message, "❌ این حساب توسط مدیریت غیرفعال شده است. برای فعال‌سازی با مدیریت مدرسه تماس بگیرید.")
+                return True
             if account.telegram_id is not None and account.telegram_id != update.effective_user.id:
                 await reply_long(update.message, "❌ این حساب قبلاً به یک حساب تلگرام دیگر متصل شده است.")
                 return True
