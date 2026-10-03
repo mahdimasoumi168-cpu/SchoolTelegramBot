@@ -2437,6 +2437,8 @@ async def process_state(update, context, u):
                             if not student_profile:
                                 raise ValueError("برای ساخت حساب کامل دانش‌آموز، از بخش «مدیریت دانش‌آموزان» گزینه «افزودن» را انتخاب کنید تا کد مدرسه و کلاس هم ثبت شود.")
                         if target.id==u.id and role!="ADMIN": raise ValueError("نقش مدیریت حساب جاری را نمی‌توانید حذف کنید.")
+                        if target.role == "ASSIGNER" and role != "ASSIGNER":
+                            await s.execute(delete(Access).where(Access.assigner_user_id == target.id))
                         target.role=role; target.active=(role!="PENDING")
                         await s.commit(); await log_action(u.id,"user_role_changed",f"{target.id}|{role}")
                         await reply_long(update.message, "✅ نقش کاربر تغییر کرد.")
@@ -2539,6 +2541,7 @@ async def process_state(update, context, u):
                     elif p[0]=="حذف" and len(p)==2:
                         target=await s.get(User,int(p[1]))
                         if not target or target.role!="ASSIGNER": raise ValueError("تعیین‌کننده پیدا نشد.")
+                        await s.execute(delete(Access).where(Access.assigner_user_id == target.id))
                         target.role,target.active,target.telegram_id,target.login_username,target.password_hash="PENDING",False,None,None,None
                         await s.commit(); await reply_long(update.message, "✅ تعیین‌کننده حذف و حساب او غیرفعال شد.")
                     else: raise ValueError("فرمت: افزودن|نام کاربری|رمز|نام / ویرایش|شناسه|نام کاربری|رمز|نام / حذف|شناسه")
