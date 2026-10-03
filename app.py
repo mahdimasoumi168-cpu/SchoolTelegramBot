@@ -786,7 +786,6 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             await render_admin_notification_list(query, page)
             return
         if action == "noop":
-            await query.answer("برای تغییر صفحه از دکمه‌های کناری استفاده کنید.")
             return
         if action == "student" and len(parts) == 3:
             try:
