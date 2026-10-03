@@ -198,6 +198,7 @@ class Question(Base):
     answer: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="OPEN")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    student_notified: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class ActivityLog(Base):
@@ -1887,6 +1888,7 @@ async def send_student_entry_digest(bot, student_user):
     digest_lines = ["🔔 پیام‌های تازه برای شما:"]
     selected_announcements = []
     selected_submissions = []
+    selected_questions = []
     async with SessionLocal() as s:
         student = (await s.execute(
             select(Student).where(Student.user_id == student_user.id)
@@ -1922,6 +1924,15 @@ async def send_student_entry_digest(bot, student_user):
             if item.kind == "announcement" or (item.kind == "tomorrow" and due_now):
                 selected_announcements.append(item.id)
         if settings.responses_enabled:
+            selected_questions = (await s.execute(
+                select(Question).where(
+                    Question.student_user_id == student_user.id,
+                    Question.status == "ANSWERED",
+                    Question.student_notified.is_(False),
+                ).order_by(Question.created_at.desc()).limit(10)
+            )).scalars().all()
+            for item in selected_questions:
+                digest_lines.append(f"\n💬 پاسخ سؤال #{item.id}:\n{item.answer or 'پاسخی ثبت نشده است.'}")
             selected_submissions = (await s.execute(
                 select(HomeworkSubmission).where(
                     HomeworkSubmission.student_user_id == student_user.id,
@@ -1959,6 +1970,10 @@ async def send_student_entry_digest(bot, student_user):
                 delivery.status, delivery.error = "SENT", ""
         for item in selected_submissions:
             current = await s.get(HomeworkSubmission, item.id)
+            if current:
+                current.student_notified = True
+        for item in selected_questions:
+            current = await s.get(Question, item.id)
             if current:
                 current.student_notified = True
         await s.commit()
@@ -2639,8 +2654,12 @@ async def process_state(update, context, u):
                         student=await s.get(User,q.student_user_id)
                         settings=await get_student_notification_settings(s, q.student_user_id)
                         if student and student.telegram_id and settings.responses_enabled:
-                            try: await send_long(context.bot, student.telegram_id,f"💬 پاسخ سؤال #{q.id}:\n{p[2]}")
-                            except Exception: log.exception("admin question notification failed")
+                            try:
+                                await send_long(context.bot, student.telegram_id, f"💬 پاسخ سؤال #{q.id}:\n{p[2]}")
+                                q.student_notified = True
+                                await s.commit()
+                            except Exception:
+                                log.exception("admin question notification failed")
                         await log_action(u.id,"admin_question_answered",str(q.id))
                         await reply_long(update.message, "✅ پاسخ سؤال ثبت شد.")
                     elif action=="حذف" and len(p)==2:
@@ -2962,7 +2981,12 @@ async def process_state(update, context, u):
                     student = await s.get(User, q.student_user_id)
                     settings = await get_student_notification_settings(s, q.student_user_id)
                     if student and student.telegram_id and settings.responses_enabled:
-                        await send_long(context.bot, student.telegram_id, f"💬 پاسخ سؤال #{qid}:\n{answer}")
+                        try:
+                            await send_long(context.bot, student.telegram_id, f"💬 پاسخ سؤال #{qid}:\n{answer}")
+                            q.student_notified = True
+                            await s.commit()
+                        except Exception:
+                            log.exception("assigner question notification failed")
                     await reply_long(update.message, "پاسخ ثبت شد.")
                 elif state == "assigner_note_title":
                     context.user_data["note_meta"] = [x.strip() for x in text.split("|", 1)]
@@ -3098,6 +3122,8 @@ async def init_db():
             await conn.execute(text("ALTER TABLE schedules ALTER COLUMN period TYPE TEXT USING period::text"))
             await conn.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"))
             await conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"))
+            await conn.execute(text("ALTER TABLE questions ADD COLUMN IF NOT EXISTS student_notified BOOLEAN NOT NULL DEFAULT TRUE"))
+            await conn.execute(text("ALTER TABLE questions ALTER COLUMN student_notified SET DEFAULT FALSE"))
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS login_username VARCHAR(100)"))
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(300)"))
             await conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS school_code VARCHAR(80) DEFAULT ''"))
