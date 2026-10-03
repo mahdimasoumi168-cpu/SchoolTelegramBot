@@ -661,6 +661,8 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             return
         action = parts[1] if len(parts) > 1 else ""
         if action == "list":
+            if context.user_data.get("state") == "submission_reject_reason":
+                context.user_data.clear()
             await send_submission_list(query.message, u)
             return
         if action == "view" and len(parts) == 3:
@@ -2590,7 +2592,8 @@ async def process_state(update, context, u):
                         if q.status!="OPEN": raise ValueError("این سؤال قبلاً پاسخ داده شده است.")
                         q.answer,q.status=p[2],"ANSWERED"; await s.commit()
                         student=await s.get(User,q.student_user_id)
-                        if student and student.telegram_id:
+                        settings=await get_student_notification_settings(s, q.student_user_id)
+                        if student and student.telegram_id and settings.responses_enabled:
                             try: await send_long(context.bot, student.telegram_id,f"💬 پاسخ سؤال #{q.id}:\n{p[2]}")
                             except Exception: log.exception("admin question notification failed")
                         await log_action(u.id,"admin_question_answered",str(q.id))
@@ -2908,8 +2911,10 @@ async def process_state(update, context, u):
                         raise ValueError("این سؤال قبلاً پاسخ داده شده است.")
                     q.answer, q.status = answer, "ANSWERED"; await s.commit()
                     student = await s.get(User, q.student_user_id)
-                    await send_long(context.bot, student.telegram_id, f"💬 پاسخ سؤال #{qid}:\n{answer}")
-                    await reply_long(update.message, "پاسخ ارسال شد.")
+                    settings = await get_student_notification_settings(s, q.student_user_id)
+                    if student and student.telegram_id and settings.responses_enabled:
+                        await send_long(context.bot, student.telegram_id, f"💬 پاسخ سؤال #{qid}:\n{answer}")
+                    await reply_long(update.message, "پاسخ ثبت شد.")
                 elif state == "assigner_note_title":
                     context.user_data["note_meta"] = [x.strip() for x in text.split("|", 1)]
                     context.user_data["state"] = "assigner_note_file"
