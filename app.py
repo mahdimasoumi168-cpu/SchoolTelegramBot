@@ -1346,7 +1346,7 @@ async def show_admin(update, context, u):
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_access"
-        await reply_long(update.message, "🔐 مدیریت دسترسی‌ها\n\nابتدا «افزودن» یا «حذف» را بفرستید؛ سپس هر فیلد را جداگانه ارسال می‌کنم.")
+        await reply_long(update.message, "🔐 مدیریت دسترسی‌ها\n\nاز دکمه‌های «افزودن» یا «حذف» انتخاب کنید؛ سپس هر فیلد را جداگانه دریافت می‌کنید.")
     elif t == "📝 مدیریت تکالیف":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
@@ -1393,7 +1393,7 @@ async def show_admin(update, context, u):
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_tomorrow"
-        await reply_long(update.message, "🔔 اطلاعیه فردا\n\nابتدا «افزودن» را ارسال کنید؛ عنوان، متن و زمان را جداگانه می‌گیرم و مقصد از اطلاعات ثبت‌شده تعیین می‌شود.")
+        await reply_long(update.message, "🔔 اطلاعیه فردا\n\nبرای شروع، دکمه «افزودن» را انتخاب کنید؛ عنوان، متن و زمان را جداگانه دریافت می‌کنید و مقصد از اطلاعات ثبت‌شده تعیین می‌شود.")
     elif t == "❓ مدیریت سؤالات":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
