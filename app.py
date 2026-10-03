@@ -468,7 +468,7 @@ async def notify_pending_admin(context: ContextTypes.DEFAULT_TYPE, u: User):
             await s.commit()
         await send_long(context.bot, 
             int(ADMIN_TELEGRAM_ID),
-            f"👤 کاربر جدید در انتظار نقش است.\\nنام: {u.name}\\nTelegram ID: {u.telegram_id}\\n\\nاز «👥 مدیریت کاربران» نقش STUDENT یا ASSIGNER را تعیین کنید."
+            f"👤 کاربر جدید در انتظار نقش است.\nنام: {u.name}\nTelegram ID: {u.telegram_id}\n\nاز «👥 مدیریت کاربران» نقش STUDENT یا ASSIGNER را تعیین کنید."
         )
     except Exception:
         log.exception("pending user notification failed")
@@ -609,12 +609,12 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                 "STUDENT": ("👨‍🎓 پنل دانش‌آموز", STUDENT_MENU),
             }
             title, menu_rows = menu_map[u.role]
-            await reply_long(query.message, "🔄 سامانه از ابتدا آماده شد.\\n" + title, reply_markup=keyboard(menu_rows))
+            await reply_long(query.message, "🔄 سامانه از ابتدا آماده شد.\n" + title, reply_markup=keyboard(menu_rows))
         else:
             context.user_data["state"] = "auth_choice"
             await reply_long(
                 query.message,
-                "🔐 ورود به سامانه مدرسه\\n\\nلطفاً نوع حساب خود را انتخاب کنید:",
+                "🔐 ورود به سامانه مدرسه\n\nلطفاً نوع حساب خود را انتخاب کنید:",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("👨‍🎓 ورود دانش‌آموز", callback_data="auth:student", style="primary")],
                     [InlineKeyboardButton("👤 ورود تعیین‌کننده", callback_data="auth:assigner", style="success")],
@@ -1152,7 +1152,7 @@ async def show_admin(update, context, u):
             if preview:
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_tomorrow"
-        await reply_long(update.message, "🔔 اطلاعیه فردا\\n\\nابتدا «افزودن» را ارسال کنید؛ عنوان، متن و زمان را جداگانه می‌گیرم و مقصد از اطلاعات ثبت‌شده تعیین می‌شود.")
+        await reply_long(update.message, "🔔 اطلاعیه فردا\n\nابتدا «افزودن» را ارسال کنید؛ عنوان، متن و زمان را جداگانه می‌گیرم و مقصد از اطلاعات ثبت‌شده تعیین می‌شود.")
     elif t == "❓ مدیریت سؤالات":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
@@ -1810,7 +1810,7 @@ async def process_state(update, context, u):
                         try:
                             await send_long(context.bot, 
                                 target.telegram_id,
-                                f"✅ نقش حساب شما توسط مدیریت تعیین شد.\\nنقش شما: {ROLE_NAMES[role]}\\nبرای ورود /start را بزنید."
+                                f"✅ نقش حساب شما توسط مدیریت تعیین شد.\nنقش شما: {ROLE_NAMES[role]}\nبرای ورود /start را بزنید."
                             )
                         except Exception:
                             log.exception("role notification failed")
@@ -1980,7 +1980,7 @@ async def process_state(update, context, u):
                     action=p[0]
                     if action=="نمایش":
                         data=(await s.execute(select(Question,User).join(User,Question.student_user_id==User.id).order_by(Question.id.desc()).limit(50))).all()
-                        await reply_long(update.message, "\n\n".join(f"#{q.id} [{q.status}] {usr.name}\\n{q.text}\\nپاسخ: {q.answer or '---'}" for q,usr in data) or "سؤالی ثبت نشده.")
+                        await reply_long(update.message, "\n\n".join(f"#{q.id} [{q.status}] {usr.name}\n{q.text}\nپاسخ: {q.answer or '---'}" for q,usr in data) or "سؤالی ثبت نشده.")
                     elif action=="پاسخ" and len(p)==3:
                         q=await s.get(Question,int(p[1]))
                         if not q: raise ValueError("سؤال پیدا نشد.")
@@ -1988,7 +1988,7 @@ async def process_state(update, context, u):
                         q.answer,q.status=p[2],"ANSWERED"; await s.commit()
                         student=await s.get(User,q.student_user_id)
                         if student and student.telegram_id:
-                            try: await send_long(context.bot, student.telegram_id,f"💬 پاسخ سؤال #{q.id}:\\n{p[2]}")
+                            try: await send_long(context.bot, student.telegram_id,f"💬 پاسخ سؤال #{q.id}:\n{p[2]}")
                             except Exception: log.exception("admin question notification failed")
                         await log_action(u.id,"admin_question_answered",str(q.id))
                         await reply_long(update.message, "✅ پاسخ سؤال ثبت و برای دانش‌آموز ارسال شد.")
