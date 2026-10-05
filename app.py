@@ -3227,9 +3227,17 @@ async def process_state(update, context, u):
                         st=await s.get(Student,int(p[1]))
                         if not st: raise ValueError("دانش‌آموز پیدا نشد.")
                         target=await s.get(User,st.user_id)
+                        # پاک‌سازی وابستگی‌های حساب قبل از غیرفعال‌سازی؛
+                        # خود User و سوابق مدیریتی حفظ می‌شوند تا FK و گزارش‌ها خراب نشوند.
+                        await s.execute(delete(ActiveTelegramSession).where(ActiveTelegramSession.user_id == st.user_id))
+                        await s.execute(delete(UserTelegramAccount).where(UserTelegramAccount.user_id == st.user_id))
+                        await s.execute(delete(Delivery).where(Delivery.user_id == st.user_id))
                         await s.execute(delete(StudentPermissionSettings).where(StudentPermissionSettings.user_id == st.user_id))
+                        await s.execute(delete(Question).where(Question.student_user_id == st.user_id))
+                        await s.execute(delete(HomeworkSubmission).where(HomeworkSubmission.student_user_id == st.user_id))
                         await s.delete(st)
-                        if target: target.role,target.active,target.telegram_id="PENDING",False,None
+                        if target:
+                            target.role,target.active,target.telegram_id="PENDING",False,None
                         await s.commit(); await reply_long(update.message, "✅ دانش‌آموز حذف و حساب او غیرفعال شد.")
                     else: raise ValueError("فرمت: افزودن|کد مدرسه|نام|کلاس / ویرایش|شناسه|کد|نام|کلاس / حذف|شناسه")
                 elif state == "admin_assigner":
@@ -3254,7 +3262,10 @@ async def process_state(update, context, u):
                     elif p[0]=="حذف" and len(p)==2:
                         target=await s.get(User,int(p[1]))
                         if not target or target.role!="ASSIGNER": raise ValueError("تعیین‌کننده پیدا نشد.")
+                        await s.execute(delete(ActiveTelegramSession).where(ActiveTelegramSession.user_id == target.id))
+                        await s.execute(delete(UserTelegramAccount).where(UserTelegramAccount.user_id == target.id))
                         await s.execute(delete(Access).where(Access.assigner_user_id == target.id))
+                        await s.execute(delete(AssignerPermissionSettings).where(AssignerPermissionSettings.user_id == target.id))
                         target.role,target.active,target.telegram_id,target.login_username,target.password_hash="PENDING",False,None,None,None
                         await s.commit(); await reply_long(update.message, "✅ تعیین‌کننده حذف و حساب او غیرفعال شد.")
                     else: raise ValueError("فرمت: افزودن|نام کاربری|رمز|نام / ویرایش|شناسه|نام کاربری|رمز|نام / حذف|شناسه")
