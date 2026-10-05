@@ -3417,6 +3417,7 @@ async def process_state(update, context, u):
                         elif action=="حذف" and len(p)==2:
                             a=await s.get(Announcement,int(p[1]))
                             if not a or a.kind!="tomorrow": raise ValueError("اطلاعیه فردا پیدا نشد.")
+                            await s.execute(delete(Delivery).where(Delivery.announcement_id == a.id))
                             await s.delete(a); await s.commit(); await reply_long(update.message, "✅ اطلاعیه فردا حذف شد.")
                         else: raise ValueError("عملیات اطلاعیه فردا نامعتبر است.")
                     else:
@@ -3435,6 +3436,7 @@ async def process_state(update, context, u):
                         elif action=="حذف" and len(p)==2:
                             a=await s.get(Announcement,int(p[1]))
                             if not a or a.kind!="announcement": raise ValueError("اطلاعیه پیدا نشد.")
+                            await s.execute(delete(Delivery).where(Delivery.announcement_id == a.id))
                             await s.delete(a); await s.commit(); await reply_long(update.message, "✅ اطلاعیه حذف شد.")
                         else: raise ValueError("عملیات اطلاعیه نامعتبر است.")
                 else:
