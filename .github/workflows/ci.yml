@@ -14,7 +14,5 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile application and migration files
-        run: >-
-          python -m py_compile app.py migrate.py migrations/env.py \
-            migrations/versions/20261005_01_baseline.py \
-            migrations/versions/20261005_02_schema_hardening.py
+        run: |
+          python -m py_compile app.py migrate.py migrations/env.py migrations/versions/20261005_01_baseline.py migrations/versions/20261005_02_schema_hardening.py
