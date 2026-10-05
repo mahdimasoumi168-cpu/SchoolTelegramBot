@@ -677,8 +677,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    # A callback is the most common path through the management panel. Keep
+    # one broken button from escaping to the global error handler and turning
+    # into the generic "operation failed" message. The exact callback/state is
+    # logged so the failing management action can be fixed without losing the
+    # user's current session.
     async with get_user_lock(query.from_user.id):
-        return await _menu_callback_locked(update, context)
+        try:
+            return await _menu_callback_locked(update, context)
+        except Exception as exc:
+            log.exception(
+                "management/callback operation failed: tg_id=%s callback=%r state=%r",
+                query.from_user.id if query and query.from_user else None,
+                query.data if query else None,
+                context.user_data.get("state") if context.user_data else None,
+            )
+            try:
+                await query.answer("خطا در اجرای عملیات؛ دوباره تلاش کنید.", show_alert=False)
+            except Exception:
+                pass
+            try:
+                await reply_long(
+                    query.message,
+                    "❌ این عملیات با خطای داخلی روبه‌رو شد.
+"
+                    "اطلاعات قبلی حساب شما حذف نشده است.
+
+"
+                    "لطفاً «بازگشت به پنل» را بزنید و عملیات را دوباره انجام دهید.",
+                    reply_markup=navigation_markup(),
+                )
+            except Exception:
+                log.exception("failed to send callback recovery message")
+            return
 
 
 async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3519,10 +3550,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
             log.error("Unhandled bot error without exception details")
     except Exception:
         log.exception("Failed to log unhandled bot error")
-    if isinstance(update, Update) and update.effective_message:
+    effective_message = getattr(update, "effective_message", None) or getattr(update, "message", None)
+    if effective_message:
         try:
-            await update.effective_message.reply_text(
-                "❌ مشکلی در اجرای این عملیات پیش آمد. اطلاعات عملیات حفظ نشده؛ لطفاً «بازگشت به پنل» یا «شروع مجدد» را بزنید.",
+            await effective_message.reply_text(
+                "❌ مشکلی در اجرای این عملیات پیش آمد.
+"
+                "اطلاعات قبلی حساب شما حذف نشده است؛ لطفاً «بازگشت به پنل» یا «شروع مجدد» را بزنید.",
                 reply_markup=navigation_markup(),
             )
         except Exception:
