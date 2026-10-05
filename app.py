@@ -2883,17 +2883,23 @@ async def process_state(update, context, u):
                     role = role.upper()
                     if role not in ("STUDENT", "ASSIGNER", "ADMIN", "PENDING"):
                         raise ValueError("نقش باید STUDENT یا ASSIGNER یا ADMIN یا PENDING باشد.")
-                    target = (await s.execute(select(User).where(User.telegram_id == int(tid)))).scalar_one_or_none()
+                    tid_int = int(tid)
+                    targets = (await s.execute(
+                        select(User).where(User.telegram_id == tid_int).order_by(User.id)
+                    )).scalars().all()
+                    if len(targets) > 1:
+                        raise ValueError("این Telegram ID به چند حساب متصل است؛ برای تغییر نقش، از «مدیریت دانش‌آموزان» یا «مدیریت تعیین‌کنندگان» استفاده کنید.")
+                    target = targets[0] if targets else None
                     if not target:
-                        target = User(telegram_id=int(tid), name=name, role=role, active=(role != "PENDING"))
+                        target = User(telegram_id=tid_int, name=name, role=role, active=(role != "PENDING"))
                         s.add(target)
                     else:
                         target.name, target.role, target.active = name, role, (role != "PENDING")
                     await s.commit()
                     if role != "PENDING":
                         try:
-                            await send_long(context.bot, 
-                                target.telegram_id,
+                            await send_long(context.bot,
+                                tid_int,
                                 f"✅ نقش حساب شما توسط مدیریت تعیین شد.\nنقش شما: {ROLE_NAMES[role]}\nبرای ورود /start را بزنید."
                             )
                         except Exception:
@@ -3620,12 +3626,22 @@ async def init_db():
     if ADMIN_TELEGRAM_ID:
         async with SessionLocal() as s:
             tid = int(ADMIN_TELEGRAM_ID)
-            await s.execute(User.__table__.update().where(User.telegram_id != tid, User.role == "ADMIN").values(role="PENDING", active=False))
-            u = (await s.execute(select(User).where(User.telegram_id == tid))).scalar_one_or_none()
-            if not u:
-                s.add(User(telegram_id=tid, name="مدیریت", role="ADMIN", active=True))
+            # There must be exactly one management role. Do not use
+            # scalar_one_or_none() on telegram_id because multi-account support
+            # intentionally allows duplicate Telegram IDs across school users.
+            admins = (await s.execute(
+                select(User).where(User.role == "ADMIN").order_by(User.id)
+            )).scalars().all()
+            u = admins[0] if admins else None
+            for other in admins[1:]:
+                other.role, other.active = "PENDING", False
+            if u is None:
+                u = User(name="مدیریت", role="ADMIN", active=True)
+                s.add(u)
+                await s.flush()
             else:
                 u.role, u.active = "ADMIN", True
+            await bind_telegram_account(s, u, tid)
             await s.commit()
 
 
