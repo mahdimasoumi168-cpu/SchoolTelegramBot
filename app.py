@@ -2941,7 +2941,7 @@ async def process_state(update, context, u):
                 return_exceptions=True,
             )
             context.user_data.clear()
-            await reply_long(update.message, "سؤال شما ثبت شد و برای مدیریت و تعیین‌کنندگان دارای دسترسی ارسال شد.", reply_markup=await student_menu_markup(u.id)
+            await reply_long(update.message, "سؤال شما ثبت شد و برای مدیریت و تعیین‌کنندگان دارای دسترسی ارسال شد.", reply_markup=await student_menu_markup(u.id))
         except ValueError as e:
             await reply_long(update.message, f"❌ {e}\nدوباره بفرستید یا «انصراف» را بزنید.")
         except Exception:
