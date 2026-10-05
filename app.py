@@ -650,7 +650,7 @@ async def panel(update: Update, text: str = "منوی پنل:"):
     if u.role == "ADMIN":
         await reply_long(update.message, text, reply_markup=keyboard(ADMIN_MENU))
     elif u.role == "ASSIGNER":
-        await reply_long(update.message, text, reply_markup=keyboard(ASSIGNER_MENU))
+        await reply_long(update.message, text, reply_markup=keyboard(assigner_menu_rows(await get_assigner_enabled_fields(u.id))))
     elif u.role == "STUDENT":
         await reply_long(update.message, text, reply_markup=await student_menu_markup(u.id))
     else:
@@ -1118,7 +1118,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         if u and u.active and u.role in ("ADMIN", "ASSIGNER", "STUDENT"):
             menu_map = {
                 "ADMIN": ("⚙️ پنل مدیریت", ADMIN_MENU),
-                "ASSIGNER": ("👤 پنل تعیین‌کننده", ASSIGNER_MENU),
+                "ASSIGNER": ("👤 پنل تعیین‌کننده", assigner_menu_rows(await get_assigner_enabled_fields(u.id))),
                 "STUDENT": ("👨‍🎓 پنل دانش‌آموز", student_menu_rows(await get_student_enabled_fields(u.id))),
             }
             title, menu_rows = menu_map[u.role]
@@ -3648,7 +3648,7 @@ async def _document_message_locked(update: Update, context: ContextTypes.DEFAULT
         s.add(Note(subject_id=sub.id, title=meta[1], file_id=doc.file_id, file_name=doc.file_name or "", created_by=u.id))
         await s.commit()
     context.user_data.clear()
-    await reply_long(update.message, f"📖 جزوه ثبت شد.\n📌 عنوان: {meta[1]}\n📚 درس: {sub.name}\n📎 فایل: {doc.file_name or 'PDF'}", reply_markup=keyboard(ASSIGNER_MENU if u.role=="ASSIGNER" else ADMIN_MENU))
+    await reply_long(update.message, f"📖 جزوه ثبت شد.\n📌 عنوان: {meta[1]}\n📚 درس: {sub.name}\n📎 فایل: {doc.file_name or 'PDF'}", reply_markup=keyboard(assigner_menu_rows(await get_assigner_enabled_fields(u.id)) if u.role=="ASSIGNER" else ADMIN_MENU))
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
