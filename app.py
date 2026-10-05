@@ -2617,9 +2617,7 @@ async def process_state(update, context, u):
             context.user_data["state"] = "auth_choice"
             await reply_long(
                 update.message,
-                "❌ عملیات لغو شد.
-
-لطفاً نوع حساب خود را انتخاب کنید:",
+                "❌ عملیات لغو شد.\n\nلطفاً نوع حساب خود را انتخاب کنید:",
                 reply_markup=auth_choice_markup(),
             )
         return True
