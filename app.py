@@ -1267,7 +1267,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         if u.role == "ADMIN":
             await reply_long(query.message, "❌ عملیات لغو شد.\n⚙️ پنل مدیریت", reply_markup=keyboard(ADMIN_MENU))
         elif u.role == "ASSIGNER":
-            await reply_long(query.message, "❌ عملیات لغو شد.\n👤 پنل تعیین‌کننده", reply_markup=keyboard(ASSIGNER_MENU))
+            await reply_long(query.message, "❌ عملیات لغو شد.\n👤 پنل تعیین‌کننده", reply_markup=keyboard(assigner_menu_rows(await get_assigner_enabled_fields(u.id))))
         else:
             await reply_long(query.message, "❌ عملیات لغو شد.\n👨‍🎓 پنل دانش‌آموز", reply_markup=await student_menu_markup(u.id))
         return
@@ -1288,7 +1288,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         if u.role == "ADMIN":
             await reply_long(query.message, "⚙️ پنل مدیریت", reply_markup=keyboard(ADMIN_MENU))
         elif u.role == "ASSIGNER":
-            await reply_long(query.message, "👤 پنل تعیین‌کننده", reply_markup=keyboard(ASSIGNER_MENU))
+            await reply_long(query.message, "👤 پنل تعیین‌کننده", reply_markup=keyboard(assigner_menu_rows(await get_assigner_enabled_fields(u.id))))
         elif u.role == "STUDENT":
             await reply_long(query.message, "👨‍🎓 پنل دانش‌آموز", reply_markup=await student_menu_markup(u.id))
         return
@@ -1440,7 +1440,7 @@ async def show_student(update, u, context=None):
                 cls = (await s.execute(select(ClassRoom).where(ClassRoom.id == st.class_id))).scalar_one_or_none()
             await reply_panel_text(update.message, f"👤 حساب کاربری\nنام: {u.name}\nنقش: {ROLE_NAMES[u.role]}\nکلاس: {cls.name if cls else 'ثبت نشده'}", u)
     else:
-        await reply_long(update.message, "برای انتخاب گزینه از دکمه‌های پنل استفاده کنید.", reply_markup=keyboard(STUDENT_MENU))
+        await reply_long(update.message, "برای انتخاب گزینه از دکمه‌های پنل استفاده کنید.", reply_markup=await student_menu_markup(u.id)
 
 
 async def allowed_subjects(s, u):
@@ -2669,7 +2669,7 @@ async def process_state(update, context, u):
                 await s.delete(note)
                 await s.commit()
             context.user_data.clear()
-            await reply_long(update.message, "✅ جزوه حذف شد.", reply_markup=keyboard(ASSIGNER_MENU))
+            await reply_long(update.message, "✅ جزوه حذف شد.", reply_markup=keyboard(assigner_menu_rows(await get_assigner_enabled_fields(u.id))))
         except ValueError as e:
             await reply_long(update.message, f"❌ {e}\nشناسه جزوه را دوباره ارسال کنید:")
         return True
@@ -2941,7 +2941,7 @@ async def process_state(update, context, u):
                 return_exceptions=True,
             )
             context.user_data.clear()
-            await reply_long(update.message, "سؤال شما ثبت شد و برای مدیریت و تعیین‌کنندگان دارای دسترسی ارسال شد.", reply_markup=keyboard(STUDENT_MENU))
+            await reply_long(update.message, "سؤال شما ثبت شد و برای مدیریت و تعیین‌کنندگان دارای دسترسی ارسال شد.", reply_markup=await student_menu_markup(u.id)
         except ValueError as e:
             await reply_long(update.message, f"❌ {e}\nدوباره بفرستید یا «انصراف» را بزنید.")
         except Exception:
@@ -3554,7 +3554,7 @@ async def process_state(update, context, u):
                     await note_session.delete(note)
                     await note_session.commit()
                 context.user_data.clear()
-                await reply_long(update.message, "✅ جزوه حذف شد.", reply_markup=keyboard(ASSIGNER_MENU))
+                await reply_long(update.message, "✅ جزوه حذف شد.", reply_markup=keyboard(assigner_menu_rows(await get_assigner_enabled_fields(u.id))))
                 return True
 
     if u.role == "ASSIGNER":
