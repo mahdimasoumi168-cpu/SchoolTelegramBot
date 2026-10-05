@@ -3938,10 +3938,23 @@ async def init_db():
     if engine.dialect.name == "postgresql":
         migration_conn = await engine.connect()
         try:
-            await migration_conn.execute(
-                text("SELECT pg_advisory_lock(:lock_id)"),
-                {"lock_id": MIGRATION_LOCK_ID},
-            )
+            # Do not wait forever for a stale deployment holding the
+            # migration lock. A live migration normally completes quickly;
+            # if another process is still migrating, give it up to 120 seconds.
+            acquired = False
+            for _ in range(120):
+                acquired = bool(await migration_conn.scalar(
+                    text("SELECT pg_try_advisory_lock(:lock_id)"),
+                    {"lock_id": MIGRATION_LOCK_ID},
+                ))
+                if acquired:
+                    break
+                await asyncio.sleep(1)
+            if not acquired:
+                raise RuntimeError(
+                    "Database migration lock is held by another bot instance "
+                    "for more than 120 seconds."
+                )
             await asyncio.to_thread(upgrade_database)
         finally:
             try:
