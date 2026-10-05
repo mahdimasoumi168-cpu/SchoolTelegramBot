@@ -1733,7 +1733,7 @@ async def show_assigner(update, context, u):
         context.user_data["state"] = "assigner_tomorrow"
         await reply_long(update.message, "🔔 اطلاعیه فردا\n\nبرای شروع، دکمه «افزودن» را انتخاب کنید؛ سپس عنوان، متن و زمان را جداگانه ارسال کنید.")
     else:
-        await reply_long(update.message, "پنل تعیین‌کننده آماده است.", reply_markup=keyboard(ASSIGNER_MENU))
+        await reply_long(update.message, "پنل تعیین‌کننده آماده است.", reply_markup=keyboard(assigner_menu_rows(await get_assigner_enabled_fields(u.id))))
 
 
 async def show_admin(update, context, u):
@@ -1770,6 +1770,8 @@ async def show_admin(update, context, u):
         await send_admin_notification_list(update.message, 0)
     elif t == "🎛️ تنظیم دکمه‌های دانش‌آموزان":
         await render_admin_student_permission_list(update.message, 0)
+    elif t == "🎛️ تنظیم دکمه‌های تعیین‌کنندگان":
+        await render_admin_assigner_permission_list(update.message, 0)
     elif t == "🔐 مدیریت دسترسی‌ها":
         async with SessionLocal() as s:
             preview = await panel_inquiry_text(s, u, t)
