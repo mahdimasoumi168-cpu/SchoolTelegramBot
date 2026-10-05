@@ -407,6 +407,12 @@ def norm_name(value: str) -> str:
     return " ".join(value.strip().casefold().split())
 
 
+def norm_username(value: str) -> str:
+    """Normalize assigner usernames for reliable login/edit operations."""
+    value = (value or "").replace("\u200c", "").replace("ي", "ی").replace("ك", "ک")
+    return value.strip().casefold()
+
+
 def hash_password(password: str, salt: str | None = None) -> str:
     salt = salt or secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 200000).hex()
@@ -2575,8 +2581,11 @@ async def process_state(update, context, u):
             return True
         async with SessionLocal() as s:
             account = (await s.execute(
-                select(User).where(User.login_username == username, User.role == "ASSIGNER", User.active.is_(True))
-            )).scalar_one_or_none()
+                assigners = (await s.execute(
+                    select(User).where(User.role == "ASSIGNER", User.active.is_(True))
+                )).scalars().all()
+                username_key = norm_username(username)
+                account = next((item for item in assigners if norm_username(item.login_username) == username_key), None)
             if not account or not verify_password(password, account.password_hash):
                 await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است. دوباره /start را بزنید.")
                 context.user_data.clear()
@@ -3019,6 +3028,8 @@ async def process_state(update, context, u):
                     p=[x.strip() for x in text.split("|")]
                     if p[0]=="افزودن" and len(p)==4:
                         username,password,name=p[1:]
+                        username = norm_username(username)
+                        if not username: raise ValueError("نام کاربری نمی‌تواند خالی باشد.")
                         if len(password)<6: raise ValueError("رمز عبور باید حداقل ۶ کاراکتر باشد.")
                         if await s.scalar(select(User.id).where(User.login_username==username).limit(1)): raise ValueError("نام کاربری تکراری است.")
                         target=User(telegram_id=None,name=name,role="ASSIGNER",active=True,login_username=username,password_hash=hash_password(password)); s.add(target); await s.commit(); await log_action(u.id,"assigner_provisioned",username); await reply_long(update.message, "✅ تعیین‌کننده ثبت شد.")
@@ -3026,9 +3037,11 @@ async def process_state(update, context, u):
                         target=await s.get(User,int(p[1]))
                         if not target or target.role!="ASSIGNER": raise ValueError("تعیین‌کننده پیدا نشد.")
                         if len(p[3])<6: raise ValueError("رمز عبور باید حداقل ۶ کاراکتر باشد.")
-                        duplicate=await s.scalar(select(User.id).where(User.login_username==p[2],User.id!=target.id).limit(1))
+                        username = norm_username(p[2])
+                        if not username: raise ValueError("نام کاربری نمی‌تواند خالی باشد.")
+                        duplicate=await s.scalar(select(User.id).where(User.login_username==username,User.id!=target.id).limit(1))
                         if duplicate: raise ValueError("نام کاربری جدید تکراری است.")
-                        target.login_username,target.password_hash,target.name,target.active=p[2],hash_password(p[3]),p[4],True
+                        target.login_username,target.password_hash,target.name,target.active=username,hash_password(p[3]),p[4],True
                         await s.commit(); await reply_long(update.message, "✅ تعیین‌کننده ویرایش شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         target=await s.get(User,int(p[1]))
