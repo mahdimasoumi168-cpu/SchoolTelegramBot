@@ -16,6 +16,8 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from migrate import upgrade_database
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
@@ -3658,10 +3660,6 @@ async def init_db():
     # worker thread. Alembic's async environment owns its own connection.
     await asyncio.to_thread(upgrade_database)
 
-    async with engine.begin() as conn:
-        # All schema changes are versioned in Alembic. Keeping DDL out of this
-        # startup transaction prevents every restart from mutating production
-        # schema and gives us a durable migration history.
     if ADMIN_TELEGRAM_ID:
         async with SessionLocal() as s:
             tid = int(ADMIN_TELEGRAM_ID)
