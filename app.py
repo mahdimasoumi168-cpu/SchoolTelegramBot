@@ -280,7 +280,7 @@ STUDENT_MENU = [
     ["📝 امتحانات", "📢 اطلاعیه‌ها"],
     ["❓ سؤال", "👤 حساب کاربری"],
     ["📖 جزوات", "🔔 اطلاعیه فردا"],
-    ["📸 ارسال تکالیف ریاضی سالمی"],
+    ["📸 ارسال تکالیف ریاضی"],
     ["🔄 تغییر حساب"],
     ["🚪 خروج"],
 ]
@@ -294,7 +294,7 @@ STUDENT_PERMISSION_FIELDS = {
     "👤 حساب کاربری": "account_enabled",
     "📖 جزوات": "notes_enabled",
     "🔔 اطلاعیه فردا": "tomorrow_enabled",
-    "📸 ارسال تکالیف ریاضی سالمی": "math_homework_enabled",
+    "📸 ارسال تکالیف ریاضی": "math_homework_enabled",
 }
 STUDENT_PERMISSION_LABELS = list(STUDENT_PERMISSION_FIELDS.keys())
 
@@ -1211,10 +1211,10 @@ async def show_student(update, u, context=None):
     if t == "👨‍🎓 پنل دانش‌آموز":
         await send_student_entry_digest(context.bot, u)
         await reply_panel_text(update.message, "👨‍🎓 پنل دانش‌آموز آماده است. از گزینه‌های زیر استفاده کنید.", u)
-    elif t == "📸 ارسال تکالیف ریاضی سالمی":
+    elif t == "📸 ارسال تکالیف ریاضی":
         context.user_data["state"] = "student_math_wait_photo"
         context.user_data["math_submission_photos"] = []
-        await reply_long(update.message, "📸 ارسال تکالیف ریاضی سالمی\n\nلطفاً عکس واضح تکلیف خود را ارسال کنید. بعد از هر عکس می‌توانید عکس دیگری اضافه کنید یا ثبت نهایی را بزنید.", reply_markup=navigation_markup())
+        await reply_long(update.message, "📸 ارسال تکالیف ریاضی\n\nلطفاً عکس واضح تکلیف خود را ارسال کنید. بعد از هر عکس می‌توانید عکس دیگری اضافه کنید یا ثبت نهایی را بزنید.", reply_markup=navigation_markup())
     elif t == "📚 درس‌های من":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
@@ -3559,7 +3559,7 @@ async def _photo_message_locked(update: Update, context: ContextTypes.DEFAULT_TY
     if state not in ("student_math_wait_photo", "student_math_more"):
         await reply_long(
             update.message,
-            "برای ارسال عکس تکلیف، ابتدا از پنل دانش‌آموز گزینه «ارسال تکالیف ریاضی سالمی» را انتخاب کنید.",
+            "برای ارسال عکس تکلیف، ابتدا از پنل دانش‌آموز گزینه «ارسال تکالیف ریاضی» را انتخاب کنید.",
             reply_markup=back_to_panel_markup("STUDENT"),
         )
         return
@@ -3653,45 +3653,15 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        if engine.dialect.name == "postgresql":
-            await conn.execute(text("ALTER TABLE users ALTER COLUMN telegram_id DROP NOT NULL"))
-            # The old schema made users.telegram_id UNIQUE. That prevented one
-            # school account from being used by multiple Telegram accounts.
-            # Remove the old PostgreSQL constraint; the link/session tables now
-            # own Telegram-to-school-account relationships.
-            await conn.execute(text("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_telegram_id_key"))
-            await conn.execute(text("DROP INDEX IF EXISTS users_telegram_id_key"))
-            # Existing schedule rows may contain a full multi-line weekly plan.
-            # Widen the column without deleting or truncating existing data.
-            await conn.execute(text("ALTER TABLE schedules ALTER COLUMN period TYPE TEXT USING period::text"))
-            # Weekly schedule text can contain a complete multi-line plan; the
-            # old VARCHAR(20) weekday column caused real insert failures.
-            await conn.execute(text("ALTER TABLE schedules ALTER COLUMN weekday TYPE TEXT USING weekday::text"))
-            await conn.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"))
-            await conn.execute(text("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"))
-            await conn.execute(text("ALTER TABLE questions ADD COLUMN IF NOT EXISTS student_notified BOOLEAN NOT NULL DEFAULT TRUE"))
-            await conn.execute(text("UPDATE questions SET student_notified = FALSE WHERE status = 'OPEN'"))
-            await conn.execute(text("ALTER TABLE questions ALTER COLUMN student_notified SET DEFAULT FALSE"))
-            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS login_username VARCHAR(100)"))
-            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(300)"))
-            await conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS school_code VARCHAR(80) DEFAULT ''"))
-            await conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS login_name VARCHAR(150) DEFAULT ''"))
-            await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_login_username_unique ON users (login_username) WHERE login_username IS NOT NULL"))
-            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_students_school_code ON students (school_code)"))
-            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_students_login_name ON students (login_name)"))
-            # Older deployments may have a single-column UNIQUE constraint/index on telegram_id.
-            # Remove it; uniqueness is only required for (user_id, telegram_id).
-            await conn.execute(text("ALTER TABLE user_telegram_accounts DROP CONSTRAINT IF EXISTS user_telegram_accounts_telegram_id_key"))
-            await conn.execute(text("DROP INDEX IF EXISTS ix_user_telegram_accounts_telegram_id"))
-            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_user_telegram_accounts_telegram_id ON user_telegram_accounts (telegram_id)"))
-            await conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS active_telegram_sessions (
-                    telegram_id BIGINT PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(id),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            """))
-            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_active_telegram_sessions_user_id ON active_telegram_sessions (user_id)"))
+
+    # Run versioned migrations outside the async SQLAlchemy transaction in a
+    # worker thread. Alembic's async environment owns its own connection.
+    await asyncio.to_thread(upgrade_database)
+
+    async with engine.begin() as conn:
+        # All schema changes are versioned in Alembic. Keeping DDL out of this
+        # startup transaction prevents every restart from mutating production
+        # schema and gives us a durable migration history.
     if ADMIN_TELEGRAM_ID:
         async with SessionLocal() as s:
             tid = int(ADMIN_TELEGRAM_ID)
@@ -3723,8 +3693,11 @@ async def post_shutdown(app: Application):
 
 
 async def post_init(app: Application):
-    await init_db()
+    # Acquire the PostgreSQL advisory lock before schema migrations as well as
+    # Telegram polling. This prevents overlapping Railway services/deployments
+    # from running migrations concurrently.
     await acquire_poll_lock()
+    await init_db()
     if app.job_queue:
         app.job_queue.run_repeating(scheduled_job, interval=60, first=10)
     log.info("School bot initialized")
