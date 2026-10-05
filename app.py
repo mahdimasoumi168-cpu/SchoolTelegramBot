@@ -711,11 +711,8 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await reply_long(
                     query.message,
-                    "❌ این عملیات با خطای داخلی روبه‌رو شد.
-"
-                    "اطلاعات قبلی حساب شما حذف نشده است.
-
-"
+                    "❌ این عملیات با خطای داخلی روبه‌رو شد.\n"
+                    "اطلاعات قبلی حساب شما حذف نشده است.\n\n"
                     "لطفاً «بازگشت به پنل» را بزنید و عملیات را دوباره انجام دهید.",
                     reply_markup=navigation_markup(),
                 )
