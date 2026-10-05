@@ -563,28 +563,27 @@ def callback_update(query, text):
 
 async def db_user(tg_id: int) -> User | None:
     async with SessionLocal() as s:
-        # The active-session table is new. If a deployment is temporarily
-        # running against an older database schema, do not turn every /start
-        # and button press into a generic runtime error; fall back to the
-        # legacy Telegram ID mapping until init_db completes successfully.
+        # The active-session table is the single source of truth for login state.
+        # Do NOT fall back to users.telegram_id: that would silently log a user
+        # back in after "خروج" and makes multi-account selection ambiguous.
         try:
-            active = await s.scalar(select(ActiveTelegramSession).where(ActiveTelegramSession.telegram_id == tg_id))
-            if active is not None:
-                user = await s.get(User, active.user_id)
-                if user is not None:
-                    return user
-                await s.delete(active)
-                await s.commit()
+            active = await s.scalar(
+                select(ActiveTelegramSession).where(
+                    ActiveTelegramSession.telegram_id == tg_id
+                )
+            )
+            if active is None:
+                return None
+            user = await s.get(User, active.user_id)
+            if user is not None:
+                return user
+            await s.delete(active)
+            await s.commit()
+            return None
         except Exception:
             await s.rollback()
-            log.exception("active Telegram session lookup failed for tg_id=%s; using legacy mapping", tg_id)
-        legacy_rows = (await s.execute(
-            select(User).where(User.telegram_id == tg_id).order_by(User.id.desc())
-        )).scalars().all()
-        # Never guess when an old database has more than one legacy mapping.
-        if len(legacy_rows) == 1:
-            return legacy_rows[0]
-        return None
+            log.exception("active Telegram session lookup failed for tg_id=%s", tg_id)
+            return None
 
 
 async def set_active_account(session, telegram_id: int, user_id: int):
@@ -654,11 +653,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg = update.effective_user
     if ADMIN_TELEGRAM_ID and str(tg.id) == ADMIN_TELEGRAM_ID:
         async with SessionLocal() as s:
-            u = (await s.execute(select(User).where(User.telegram_id == tg.id))).scalar_one_or_none()
+            # The configured admin Telegram ID is authoritative. Find an
+            # existing admin account without relying on the legacy UNIQUE
+            # telegram_id column, then bind this Telegram to it.
+            u = (await s.execute(
+                select(User).where(User.role == "ADMIN").order_by(User.id).limit(1)
+            )).scalar_one_or_none()
             if not u:
-                s.add(User(telegram_id=tg.id, name="مدیریت", role="ADMIN", active=True))
+                u = User(name="مدیریت", role="ADMIN", active=True)
+                s.add(u)
+                await s.flush()
             else:
                 u.role, u.active = "ADMIN", True
+            await bind_telegram_account(s, u, tg.id)
             await s.commit()
         await panel(update, "⚙️ پنل مدیریت\nدسترسی مدیر فعال است.")
         return
