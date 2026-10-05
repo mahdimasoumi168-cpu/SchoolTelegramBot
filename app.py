@@ -3569,8 +3569,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     if effective_message:
         try:
             await effective_message.reply_text(
-                "❌ مشکلی در اجرای این عملیات پیش آمد.
-"
+                "❌ مشکلی در اجرای این عملیات پیش آمد.\n"
                 "اطلاعات قبلی حساب شما حذف نشده است؛ لطفاً «بازگشت به پنل» یا «شروع مجدد» را بزنید.",
                 reply_markup=navigation_markup(),
             )
