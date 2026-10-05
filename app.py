@@ -277,6 +277,20 @@ class StudentPermissionSettings(Base):
     tomorrow_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     math_homework_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
+class AssignerPermissionSettings(Base):
+    __tablename__ = "assigner_permission_settings"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    students_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    lessons_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    assignments_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    announcements_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    exams_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    questions_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    tomorrow_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    photo_homework_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
 STUDENT_MENU = [
     ["👨‍🎓 پنل دانش‌آموز", "📚 درس‌های من"],
     ["📝 تکالیف", "📅 برنامه هفتگی"],
@@ -339,6 +353,55 @@ async def ensure_student_permission_settings(session, user_id: int):
     return settings
 
 
+ASSIGNER_PERMISSION_FIELDS = {
+    "👨‍🎓 دانش‌آموزان": "students_enabled",
+    "📚 درس‌ها": "lessons_enabled",
+    "📝 تکالیف": "assignments_enabled",
+    "📢 ارسال اطلاعیه": "announcements_enabled",
+    "📅 برنامه هفتگی": "schedule_enabled",
+    "📝 امتحانات": "exams_enabled",
+    "📖 جزوات": "notes_enabled",
+    "❓ سؤالات": "questions_enabled",
+    "🔔 اطلاعیه فردا": "tomorrow_enabled",
+    "📥 بررسی تکالیف عکس‌ها": "photo_homework_enabled",
+}
+ASSIGNER_PERMISSION_LABELS = list(ASSIGNER_PERMISSION_FIELDS.keys())
+
+def assigner_menu_rows(enabled_fields: set[str]):
+    rows = []
+    for row in ASSIGNER_MENU:
+        filtered = [
+            label for label in row
+            if label in ("👤 پنل تعیین‌کننده", "🔄 تغییر حساب", "🚪 خروج")
+            or (label in ASSIGNER_PERMISSION_FIELDS and ASSIGNER_PERMISSION_FIELDS[label] in enabled_fields)
+        ]
+        if filtered:
+            rows.append(filtered)
+    return rows
+
+async def get_assigner_enabled_fields(user_id: int) -> set[str]:
+    try:
+        async with SessionLocal() as s:
+            settings = await s.get(AssignerPermissionSettings, user_id)
+            if not settings:
+                return set(ASSIGNER_PERMISSION_FIELDS.values())
+            return {
+                field for field in ASSIGNER_PERMISSION_FIELDS.values()
+                if bool(getattr(settings, field, True))
+            }
+    except Exception:
+        log.exception("assigner permission settings unavailable for user %s", user_id)
+        return set(ASSIGNER_PERMISSION_FIELDS.values())
+
+async def ensure_assigner_permission_settings(session, user_id: int):
+    settings = await session.get(AssignerPermissionSettings, user_id)
+    if not settings:
+        settings = AssignerPermissionSettings(user_id=user_id)
+        session.add(settings)
+        await session.flush()
+    return settings
+
+
 
 ASSIGNER_MENU = [
     ["👤 پنل تعیین‌کننده", "👨‍🎓 دانش‌آموزان"],
@@ -366,6 +429,7 @@ ADMIN_MENU = [
     ["🗄️ مدیریت دیتابیس", "🔒 تنظیمات امنیتی"],
     ["🔔 تنظیم اعلان‌های دانش‌آموزان"],
     ["🎛️ تنظیم دکمه‌های دانش‌آموزان"],
+    ["🎛️ تنظیم دکمه‌های تعیین‌کنندگان"],
     ["🔄 تغییر حساب"],
     ["🚪 خروج"],
 ]
@@ -997,6 +1061,61 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                 await reply_long(query.message, f"❌ {e}", reply_markup=back_to_panel_markup("ASSIGNER"))
             return
         return
+
+    if data.startswith("assignerperm:"):
+        parts = data.split(":")
+        u = await db_user(query.from_user.id)
+        if not u or not u.active or u.role != "ADMIN":
+            await reply_long(query.message, "فقط مدیریت می‌تواند دکمه‌های تعیین‌کنندگان را تنظیم کند.")
+            return
+        action = parts[1] if len(parts) > 1 else ""
+        if action == "noop":
+            return
+        if action == "list":
+            page = 0
+            if len(parts) == 3:
+                try:
+                    page = max(0, int(parts[2]))
+                except ValueError:
+                    await reply_long(query.message, "شماره صفحه نامعتبر است.")
+                    return
+            await render_admin_assigner_permission_list(query.message, page)
+            return
+        if action == "assigner" and len(parts) == 3:
+            try:
+                target_id = int(parts[2])
+            except ValueError:
+                await reply_long(query.message, "شناسه تعیین‌کننده نامعتبر است.")
+                return
+            await render_admin_assigner_permission_settings(query, target_id)
+            return
+        if action in ("toggle", "all") and len(parts) == 4:
+            try:
+                target_id = int(parts[2])
+            except ValueError:
+                await reply_long(query.message, "شناسه تعیین‌کننده نامعتبر است.")
+                return
+            async with SessionLocal() as s:
+                target = await s.get(User, target_id)
+                if not target or target.role != "ASSIGNER":
+                    await reply_long(query.message, "تعیین‌کننده پیدا نشد.")
+                    return
+                settings = await ensure_assigner_permission_settings(s, target_id)
+                if action == "toggle":
+                    field = parts[3]
+                    if field not in ASSIGNER_PERMISSION_FIELDS.values():
+                        await reply_long(query.message, "دسترسی نامعتبر است.")
+                        return
+                    setattr(settings, field, not bool(getattr(settings, field)))
+                else:
+                    if parts[3] not in ("on", "off"):
+                        return
+                    enabled = parts[3] == "on"
+                    for field in ASSIGNER_PERMISSION_FIELDS.values():
+                        setattr(settings, field, enabled)
+                await s.commit()
+            await render_admin_assigner_permission_settings(query, target_id)
+            return
 
     if data.startswith("studentperm:"):
         parts = data.split(":")
@@ -1988,6 +2107,68 @@ def notification_settings_markup(user_id, settings):
     return InlineKeyboardMarkup(rows)
 
 
+async def render_admin_assigner_permission_list(message, page: int = 0):
+    page_size = 25
+    page = max(0, int(page))
+    async with SessionLocal() as s:
+        total = await s.scalar(select(func.count(User.id)).where(User.role == "ASSIGNER"))
+        max_page = max(0, (int(total or 0) - 1) // page_size)
+        page = min(page, max_page)
+        rows = (await s.execute(
+            select(User).where(User.role == "ASSIGNER").order_by(User.name, User.id)
+            .offset(page * page_size).limit(page_size)
+        )).scalars().all()
+    buttons = [[InlineKeyboardButton(
+        f"{user.name or 'بدون نام'} — @{user.login_username or 'بدون نام کاربری'}",
+        callback_data=f"assignerperm:assigner:{user.id}", style="primary"
+    )] for user in rows]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"assignerperm:list:{page-1}", style="primary"))
+    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="assignerperm:noop"))
+    if page < max_page:
+        nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"assignerperm:list:{page+1}", style="primary"))
+    if nav:
+        buttons.append(nav)
+    buttons.append([InlineKeyboardButton("⚙️ بازگشت به پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
+    body = "🎛️ تنظیم دکمه‌های تعیین‌کنندگان\n\nتعیین‌کننده موردنظر را انتخاب کنید:"
+    if not rows:
+        body += "\n\nهنوز تعیین‌کننده‌ای ثبت نشده است."
+    await reply_long(message, body, reply_markup=InlineKeyboardMarkup(buttons))
+
+async def render_admin_assigner_permission_settings(query, target_user_id: int):
+    async with SessionLocal() as s:
+        target = await s.get(User, target_user_id)
+        if not target or target.role != "ASSIGNER":
+            await reply_long(query.message, "❌ تعیین‌کننده پیدا نشد.")
+            return
+        settings = await s.get(AssignerPermissionSettings, target_user_id)
+        values = {
+            field: bool(getattr(settings, field, True)) if settings else True
+            for field in ASSIGNER_PERMISSION_FIELDS.values()
+        }
+    buttons = []
+    for label, field in ASSIGNER_PERMISSION_FIELDS.items():
+        enabled = values[field]
+        buttons.append([InlineKeyboardButton(
+            f"{'🟢 فعال' if enabled else '🔴 غیرفعال'} — {label}",
+            callback_data=f"assignerperm:toggle:{target_user_id}:{field}",
+            style="success" if enabled else "danger"
+        )])
+    buttons.append([
+        InlineKeyboardButton("✅ فعال‌سازی همه", callback_data=f"assignerperm:all:{target_user_id}:on", style="success"),
+        InlineKeyboardButton("⛔ غیرفعال‌سازی همه", callback_data=f"assignerperm:all:{target_user_id}:off", style="danger")
+    ])
+    buttons.append([InlineKeyboardButton("⬅️ انتخاب تعیین‌کننده", callback_data="assignerperm:list:0", style="primary")])
+    buttons.append([InlineKeyboardButton("⚙️ پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
+    body = (
+        f"🎛️ تنظیم دکمه‌های تعیین‌کننده\n\n"
+        f"👤 {target.name or 'بدون نام'}\n"
+        f"🔑 نام کاربری: {target.login_username or 'ثبت نشده'}\n\n"
+        "با انتخاب هر گزینه، همان دکمه برای این تعیین‌کننده فعال یا غیرفعال می‌شود."
+    )
+    await query.edit_message_text(body, reply_markup=InlineKeyboardMarkup(buttons))
+
 async def render_admin_student_permission_list(message, page: int = 0):
     page_size = 25
     page = max(0, int(page))
@@ -2590,8 +2771,8 @@ async def process_state(update, context, u):
             )).scalars().all()
             username_key = norm_username(username)
             account = next((item for item in assigners if norm_username(item.login_username) == username_key), None)
-            valid_password = verify_password(password, account.password_hash)
-            if not valid_password and account.password_hash:
+            valid_password = bool(account and account.password_hash and verify_password(password, account.password_hash))
+            if not valid_password and account and account.password_hash:
                 valid_password = secrets.compare_digest(account.password_hash, password)
                 if valid_password:
                     account.password_hash = hash_password(password)
@@ -3761,7 +3942,7 @@ def main():
         .build()
     )
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:|note_date:|action:|mathsub:|submission:|adminnotify:|studentperm:)"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:|note_date:|action:|mathsub:|submission:|adminnotify:|studentperm:|assignerperm:)"))
     app.add_handler(MessageHandler(filters.PHOTO, photo_message))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
