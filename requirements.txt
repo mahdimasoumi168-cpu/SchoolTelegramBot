@@ -1,3 +1,4 @@
+alembic==1.16.5
 python-telegram-bot[job-queue]==22.8
 SQLAlchemy==2.0.43
 asyncpg==0.30.0
