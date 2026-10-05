@@ -95,7 +95,7 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    telegram_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, index=True, nullable=True)
+    telegram_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(150), default="")
     login_username: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(300), nullable=True)
@@ -388,11 +388,10 @@ async def bind_telegram_account(session, account, telegram_id: int):
     if link is None:
         session.add(UserTelegramAccount(user_id=locked.id, telegram_id=telegram_id))
 
-    # Keep the legacy field populated for compatibility with existing data/code.
+    # Keep the legacy field only as a compatibility hint. It is no longer
+    # unique, so another school account may already contain this Telegram ID.
     if locked.telegram_id is None:
-        legacy_owner = await session.scalar(select(User).where(User.telegram_id == telegram_id).with_for_update())
-        if legacy_owner is None:
-            locked.telegram_id = telegram_id
+        locked.telegram_id = telegram_id
     await set_active_account(session, telegram_id, locked.id)
     return locked
 
@@ -579,7 +578,13 @@ async def db_user(tg_id: int) -> User | None:
         except Exception:
             await s.rollback()
             log.exception("active Telegram session lookup failed for tg_id=%s; using legacy mapping", tg_id)
-        return await s.scalar(select(User).where(User.telegram_id == tg_id))
+        legacy_rows = (await s.execute(
+            select(User).where(User.telegram_id == tg_id).order_by(User.id.desc())
+        )).scalars().all()
+        # Never guess when an old database has more than one legacy mapping.
+        if len(legacy_rows) == 1:
+            return legacy_rows[0]
+        return None
 
 
 async def set_active_account(session, telegram_id: int, user_id: int):
@@ -3568,6 +3573,12 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         if engine.dialect.name == "postgresql":
             await conn.execute(text("ALTER TABLE users ALTER COLUMN telegram_id DROP NOT NULL"))
+            # The old schema made users.telegram_id UNIQUE. That prevented one
+            # school account from being used by multiple Telegram accounts.
+            # Remove the old PostgreSQL constraint; the link/session tables now
+            # own Telegram-to-school-account relationships.
+            await conn.execute(text("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_telegram_id_key"))
+            await conn.execute(text("DROP INDEX IF EXISTS users_telegram_id_key"))
             # Existing schedule rows may contain a full multi-line weekly plan.
             # Widen the column without deleting or truncating existing data.
             await conn.execute(text("ALTER TABLE schedules ALTER COLUMN period TYPE TEXT USING period::text"))
