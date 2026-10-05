@@ -1440,7 +1440,7 @@ async def show_student(update, u, context=None):
                 cls = (await s.execute(select(ClassRoom).where(ClassRoom.id == st.class_id))).scalar_one_or_none()
             await reply_panel_text(update.message, f"👤 حساب کاربری\nنام: {u.name}\nنقش: {ROLE_NAMES[u.role]}\nکلاس: {cls.name if cls else 'ثبت نشده'}", u)
     else:
-        await reply_long(update.message, "برای انتخاب گزینه از دکمه‌های پنل استفاده کنید.", reply_markup=await student_menu_markup(u.id)
+        await reply_long(update.message, "برای انتخاب گزینه از دکمه‌های پنل استفاده کنید.", reply_markup=await student_menu_markup(u.id))
 
 
 async def allowed_subjects(s, u):
