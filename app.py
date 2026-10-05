@@ -544,10 +544,18 @@ class _CallbackMessage:
 
 
 class _CallbackUpdate:
+    """Small Update-compatible adapter for reusing text workflows from callbacks.
+    
+    Telegram callbacks use CallbackQuery instead of Message. Several existing
+    CRUD/auth workflows legitimately inspect effective_chat/effective_message,
+    so the adapter must expose the same fields as a normal Update.
+    """
     def __init__(self, query, text):
         self.callback_query = query
         self.message = _CallbackMessage(query.message, text)
         self.effective_user = query.from_user
+        self.effective_chat = query.message.chat if query.message else None
+        self.effective_message = query.message
 
 
 def callback_update(query, text):
@@ -1039,6 +1047,9 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             )
         return
     if text == "__CANCEL__":
+        # Cancel must always be safe, even when the previous operation was
+        # interrupted halfway through. Clear only the temporary workflow state;
+        # the logged-in account and its database records remain untouched.
         context.user_data.clear()
         u = await db_user(query.from_user.id)
         if not u or not u.active:
