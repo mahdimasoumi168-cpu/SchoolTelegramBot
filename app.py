@@ -2859,8 +2859,8 @@ async def process_state(update, context, u):
             )).scalars().all()
             username_key = norm_username(username)
             account = next((item for item in assigners if norm_username(item.login_username) == username_key), None)
-            valid_password = verify_password(password, account.password_hash)
-            if not valid_password and account.password_hash:
+            valid_password = bool(account and account.password_hash and verify_password(password, account.password_hash))
+            if not valid_password and account and account.password_hash:
                 valid_password = secrets.compare_digest(account.password_hash, password)
                 if valid_password:
                     account.password_hash = hash_password(password)
