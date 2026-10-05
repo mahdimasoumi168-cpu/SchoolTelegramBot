@@ -2663,17 +2663,20 @@ async def process_state(update, context, u):
         username = context.user_data.get("login_username", "").strip()
         password = text
         async with SessionLocal() as s:
-            account = (await s.execute(
-                select(User).where(User.login_username == username, User.role == "ASSIGNER", User.active.is_(True))
-            )).scalar_one_or_none()
+            assigners = (await s.execute(
+                select(User).where(User.role == "ASSIGNER", User.active.is_(True))
+            )).scalars().all()
+            username_key = norm_username(username)
+            account = next((item for item in assigners if norm_username(item.login_username) == username_key), None)
             if not account or not verify_password(password, account.password_hash):
                 await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است.")
                 return True
             
+            account.login_username = norm_username(account.login_username)
             account = await bind_telegram_account(s, account, update.effective_user.id)
             await s.commit()
         context.user_data.clear()
-        await log_action(account.id, "assigner_login", username)
+        await log_action(account.id, "assigner_login", account.login_username or username)
         await panel(update, f"سلام {account.name} 👋\nورود با موفقیت انجام شد.")
         await send_assigner_entry_alert(context.bot, account, update.effective_chat.id)
         return True
