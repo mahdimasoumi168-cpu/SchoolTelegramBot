@@ -1944,7 +1944,7 @@ async def render_admin_student_permission_list(message, page: int = 0):
     buttons = [[InlineKeyboardButton(f"{user.name or 'بدون نام'} — {cls.name if cls else 'بدون کلاس'}", callback_data=f"studentperm:student:{user.id}", style="primary")] for user, student, cls in rows]
     nav = []
     if page > 0: nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"studentperm:list:{page-1}", style="primary"))
-    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="studentperm:noop", style="secondary"))
+    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="studentperm:noop"))
     if page < max_page: nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"studentperm:list:{page+1}", style="primary"))
     if nav: buttons.append(nav)
     buttons.append([InlineKeyboardButton("⚙️ بازگشت به پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
@@ -2022,7 +2022,7 @@ async def render_admin_notification_list(query, page: int = 0):
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"adminnotify:list:{page-1}", style="primary"))
-    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="adminnotify:noop", style="secondary"))
+    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="adminnotify:noop"))
     if page < max_page:
         nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"adminnotify:list:{page+1}", style="primary"))
     if nav:
@@ -2066,7 +2066,7 @@ async def send_admin_notification_list(message, page: int = 0):
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"adminnotify:list:{page-1}", style="primary"))
-    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="adminnotify:noop", style="secondary"))
+    nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="adminnotify:noop"))
     if page < max_page:
         nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"adminnotify:list:{page+1}", style="primary"))
     if nav:
@@ -2128,7 +2128,7 @@ async def send_submission_list(message, assigner, page: int = 0):
         nav = []
         if page > 0:
             nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"submission:list:{page-1}", style="primary"))
-        nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="submission:noop", style="secondary"))
+        nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="submission:noop"))
         if page < max_page:
             nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"submission:list:{page+1}", style="primary"))
         buttons.append(nav)
