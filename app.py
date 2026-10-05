@@ -2580,12 +2580,11 @@ async def process_state(update, context, u):
             await reply_long(update.message, "❌ رمز عبور نمی‌تواند خالی باشد. دوباره ارسال کنید:")
             return True
         async with SessionLocal() as s:
-            account = (await s.execute(
-                assigners = (await s.execute(
-                    select(User).where(User.role == "ASSIGNER", User.active.is_(True))
-                )).scalars().all()
-                username_key = norm_username(username)
-                account = next((item for item in assigners if norm_username(item.login_username) == username_key), None)
+            assigners = (await s.execute(
+                select(User).where(User.role == "ASSIGNER", User.active.is_(True))
+            )).scalars().all()
+            username_key = norm_username(username)
+            account = next((item for item in assigners if norm_username(item.login_username) == username_key), None)
             if not account or not verify_password(password, account.password_hash):
                 await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است. دوباره /start را بزنید.")
                 context.user_data.clear()
