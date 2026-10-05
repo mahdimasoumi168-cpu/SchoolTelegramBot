@@ -307,11 +307,18 @@ def student_menu_rows(enabled_fields: set[str]):
     return rows
 
 async def get_student_enabled_fields(user_id: int) -> set[str]:
-    async with SessionLocal() as s:
-        settings = await s.get(StudentPermissionSettings, user_id)
-        if not settings:
-            return set(STUDENT_PERMISSION_FIELDS.values())
-        return {field for field in STUDENT_PERMISSION_FIELDS.values() if bool(getattr(settings, field, True))}
+    # If an older deployment has not created the optional permission table yet,
+    # keep the bot usable and expose the normal full student menu. The startup
+    # migration will create the table on the next successful boot.
+    try:
+        async with SessionLocal() as s:
+            settings = await s.get(StudentPermissionSettings, user_id)
+            if not settings:
+                return set(STUDENT_PERMISSION_FIELDS.values())
+            return {field for field in STUDENT_PERMISSION_FIELDS.values() if bool(getattr(settings, field, True))}
+    except Exception:
+        log.exception("student permission settings unavailable for user %s", user_id)
+        return set(STUDENT_PERMISSION_FIELDS.values())
 
 async def student_menu_markup(user_id: int):
     return keyboard(student_menu_rows(await get_student_enabled_fields(user_id)))
@@ -549,14 +556,21 @@ def callback_update(query, text):
 
 async def db_user(tg_id: int) -> User | None:
     async with SessionLocal() as s:
-        active = await s.scalar(select(ActiveTelegramSession).where(ActiveTelegramSession.telegram_id == tg_id))
-        if active is not None:
-            user = await s.get(User, active.user_id)
-            if user is not None:
-                return user
-            await s.delete(active)
-            await s.commit()
-        # Backward compatibility for users created before multi-account login.
+        # The active-session table is new. If a deployment is temporarily
+        # running against an older database schema, do not turn every /start
+        # and button press into a generic runtime error; fall back to the
+        # legacy Telegram ID mapping until init_db completes successfully.
+        try:
+            active = await s.scalar(select(ActiveTelegramSession).where(ActiveTelegramSession.telegram_id == tg_id))
+            if active is not None:
+                user = await s.get(User, active.user_id)
+                if user is not None:
+                    return user
+                await s.delete(active)
+                await s.commit()
+        except Exception:
+            await s.rollback()
+            log.exception("active Telegram session lookup failed for tg_id=%s; using legacy mapping", tg_id)
         return await s.scalar(select(User).where(User.telegram_id == tg_id))
 
 
