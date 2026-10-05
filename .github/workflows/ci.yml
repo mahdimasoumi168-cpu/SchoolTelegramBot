@@ -13,5 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Compile latest app.py
-        run: python -m py_compile app.py
+      - name: Compile application and migration files
+        run: >-
+          python -m py_compile app.py migrate.py migrations/env.py
+          migrations/versions/*.py
