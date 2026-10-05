@@ -59,6 +59,7 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSe
 # Telegram at a time, even while Railway temporarily overlaps deployments.
 POLL_LOCK_CONN = None
 POLL_LOCK_ID = 7165912028
+MIGRATION_LOCK_ID = 7165912029
 
 USER_LOCKS = {}
 
@@ -3656,9 +3657,27 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Run versioned migrations outside the async SQLAlchemy transaction in a
-    # worker thread. Alembic's async environment owns its own connection.
-    await asyncio.to_thread(upgrade_database)
+    # Run migrations under a short-lived, separate advisory lock. The polling
+    # lock must NOT be held while migrating; otherwise an older live Railway
+    # service could make a new deployment wait forever.
+    if engine.dialect.name == "postgresql":
+        migration_conn = await engine.connect()
+        try:
+            await migration_conn.execute(
+                text("SELECT pg_advisory_lock(:lock_id)"),
+                {"lock_id": MIGRATION_LOCK_ID},
+            )
+            await asyncio.to_thread(upgrade_database)
+        finally:
+            try:
+                await migration_conn.execute(
+                    text("SELECT pg_advisory_unlock(:lock_id)"),
+                    {"lock_id": MIGRATION_LOCK_ID},
+                )
+            finally:
+                await migration_conn.close()
+    else:
+        await asyncio.to_thread(upgrade_database)
 
     if ADMIN_TELEGRAM_ID:
         async with SessionLocal() as s:
@@ -3691,11 +3710,10 @@ async def post_shutdown(app: Application):
 
 
 async def post_init(app: Application):
-    # Acquire the PostgreSQL advisory lock before schema migrations as well as
-    # Telegram polling. This prevents overlapping Railway services/deployments
-    # from running migrations concurrently.
-    await acquire_poll_lock()
     await init_db()
+    # Hold the polling lock only after database initialization. This is the
+    # single-instance guard for Telegram polling, not a migration lock.
+    await acquire_poll_lock()
     if app.job_queue:
         app.job_queue.run_repeating(scheduled_job, interval=60, first=10)
     log.info("School bot initialized")
