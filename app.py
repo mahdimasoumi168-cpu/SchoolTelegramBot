@@ -2611,7 +2611,17 @@ async def process_state(update, context, u):
         return True
     if text == "انصراف":
         context.user_data.clear()
-        await panel(update, "عملیات لغو شد.")
+        if u and u.active and u.role in ("ADMIN", "ASSIGNER", "STUDENT"):
+            await panel(update, "عملیات لغو شد.")
+        else:
+            context.user_data["state"] = "auth_choice"
+            await reply_long(
+                update.message,
+                "❌ عملیات لغو شد.
+
+لطفاً نوع حساب خود را انتخاب کنید:",
+                reply_markup=auth_choice_markup(),
+            )
         return True
 
     # Explicit multi-step determiner note workflow. The old path treated the
