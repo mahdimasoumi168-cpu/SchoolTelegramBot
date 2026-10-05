@@ -586,6 +586,29 @@ async def db_user(tg_id: int) -> User | None:
             return None
 
 
+async def get_notification_telegram_id(session, user_id: int, legacy_telegram_id: int | None = None) -> int | None:
+    """Resolve a Telegram destination from active session, linked account, then legacy field."""
+    active = await session.scalar(
+        select(ActiveTelegramSession.telegram_id)
+        .where(ActiveTelegramSession.user_id == user_id)
+        .order_by(ActiveTelegramSession.updated_at.desc())
+        .limit(1)
+    )
+    if active is not None:
+        return int(active)
+
+    linked = await session.scalar(
+        select(UserTelegramAccount.telegram_id)
+        .where(UserTelegramAccount.user_id == user_id)
+        .order_by(UserTelegramAccount.created_at.desc(), UserTelegramAccount.id.desc())
+        .limit(1)
+    )
+    if linked is not None:
+        return int(linked)
+
+    return int(legacy_telegram_id) if legacy_telegram_id is not None else None
+
+
 async def set_active_account(session, telegram_id: int, user_id: int):
     active = await session.get(ActiveTelegramSession, telegram_id)
     if active is None:
@@ -687,8 +710,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def safe_answer_callback(query):
+    """Answer callback queries defensively so stale buttons cannot abort the operation."""
+    if not query:
+        return
+    try:
+        await query.answer()
+    except Exception:
+        log.debug("callback acknowledgement failed", exc_info=True)
+
+
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if not query or not query.from_user:
+        return
     # A callback is the most common path through the management panel. Keep
     # one broken button from escaping to the global error handler and turning
     # into the generic "operation failed" message. The exact callback/state is
@@ -709,8 +744,11 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
             try:
+                recovery_message = getattr(query, "message", None) or getattr(update, "effective_message", None)
+                if recovery_message is None:
+                    return
                 await reply_long(
-                    query.message,
+                    recovery_message,
                     "❌ این عملیات با خطای داخلی روبه‌رو شد.\n"
                     "اطلاعات قبلی حساب شما حذف نشده است.\n\n"
                     "لطفاً «بازگشت به پنل» را بزنید و عملیات را دوباره انجام دهید.",
@@ -723,7 +761,9 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    if not query or not query.from_user:
+        return
+    await safe_answer_callback(query)
     data = query.data or ""
     if data == "auth:student":
         context.user_data.clear()
@@ -1762,7 +1802,6 @@ async def notify_class(bot, class_id: int | None, text: str, announcement_id: in
         q = select(User, Student).join(Student, Student.user_id == User.id).where(
             User.role == "STUDENT",
             User.active.is_(True),
-            User.telegram_id.is_not(None),
         )
         if class_id is not None:
             q = q.where(Student.class_id == class_id)
@@ -1815,11 +1854,13 @@ async def notify_class(bot, class_id: int | None, text: str, announcement_id: in
                 by_user[user.id] = d
         await s.commit()
 
-        targets = [
-            (user.id, user.telegram_id)
-            for user, _ in rows
-            if by_user[user.id].status != "SENT"
-        ]
+        targets = []
+        for user, _ in rows:
+            if by_user[user.id].status == "SENT":
+                continue
+            telegram_id = await get_notification_telegram_id(s, user.id, user.telegram_id)
+            if telegram_id is not None:
+                targets.append((user.id, telegram_id))
 
     semaphore = asyncio.Semaphore(10)
 
@@ -2170,14 +2211,20 @@ async def notify_assigners_submission(bot, submission_id: int, class_id: int, st
                 Access.class_id == class_id,
                 User.role == "ASSIGNER",
                 User.active.is_(True),
-                User.telegram_id.is_not(None),
             ).distinct()
         )).scalars().all()
-    for recipient in recipients:
+    async with SessionLocal() as s:
+        destinations = [
+            (recipient, await get_notification_telegram_id(s, recipient.id, recipient.telegram_id))
+            for recipient in recipients
+        ]
+    for recipient, telegram_id in destinations:
+        if telegram_id is None:
+            continue
         try:
             await send_long(
                 bot,
-                recipient.telegram_id,
+                telegram_id,
                 f"📥 تکلیف تصویری جدید از {student_name} ثبت شد.",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton(
@@ -2220,7 +2267,10 @@ async def finalize_submission_review(bot, reviewer, submission_id: int, status: 
         submission.reviewed_by = reviewer.id
         submission.reviewed_at = datetime.now(timezone.utc)
         await s.commit()
-        telegram_id = student.telegram_id if student else None
+        telegram_id = (
+            await get_notification_telegram_id(s, student.id, student.telegram_id)
+            if student else None
+        )
         student_name = student.name if student else "دانش‌آموز"
     sent = False
     if should_notify and telegram_id:
@@ -2256,7 +2306,12 @@ async def send_student_entry_digest(bot, student_user):
         student = (await s.execute(
             select(Student).where(Student.user_id == student_user.id)
         )).scalar_one_or_none()
-        if not student or not student.class_id or not student_user.telegram_id:
+        if not student or not student.class_id:
+            return
+        notification_telegram_id = await get_notification_telegram_id(
+            s, student_user.id, student_user.telegram_id
+        )
+        if notification_telegram_id is None:
             return
         settings = await get_student_notification_settings(s, student_user.id)
         cutoff = settings.last_digest_at or (now - timedelta(days=1))
@@ -2321,7 +2376,7 @@ async def send_student_entry_digest(bot, student_user):
             await s.commit()
             return
     try:
-        await send_long(bot, student_user.telegram_id, "\n".join(digest_lines), reply_markup=back_to_panel_markup("STUDENT"))
+        await send_long(bot, notification_telegram_id, "\n".join(digest_lines), reply_markup=back_to_panel_markup("STUDENT"))
     except Exception:
         log.exception("student entry digest failed for user %s", student_user.id)
         return
@@ -2651,21 +2706,26 @@ async def process_state(update, context, u):
                             Access.subject_id == subject_id,
                         ).distinct()
                     )).scalars().all())
+                destinations = [
+                    (recipient, await get_notification_telegram_id(s, recipient.id, recipient.telegram_id))
+                    for recipient in recipients
+                ]
             semaphore = asyncio.Semaphore(10)
 
-            async def notify_recipient(recipient):
+            async def notify_recipient(recipient, telegram_id):
                 async with semaphore:
                     try:
-                        if recipient.telegram_id:
-                            await send_long(context.bot, 
-                                recipient.telegram_id,
+                        if telegram_id:
+                            await send_long(
+                                context.bot,
+                                telegram_id,
                                 f"❓ سؤال جدید #{question_id}\n👨‍🎓 {u.name}\n{question_text}",
                             )
                     except Exception:
                         log.exception("question notification failed for user %s", recipient.id)
 
             await asyncio.gather(
-                *(notify_recipient(recipient) for recipient in recipients),
+                *(notify_recipient(recipient, telegram_id) for recipient, telegram_id in destinations),
                 return_exceptions=True,
             )
             context.user_data.clear()
@@ -3091,9 +3151,10 @@ async def process_state(update, context, u):
                         q.answer,q.status=p[2],"ANSWERED"; await s.commit()
                         student=await s.get(User,q.student_user_id)
                         settings=await get_student_notification_settings(s, q.student_user_id)
-                        if student and student.telegram_id and settings.responses_enabled:
+                        student_telegram_id = await get_notification_telegram_id(s, student.id, student.telegram_id) if student else None
+                        if student and student_telegram_id and settings.responses_enabled:
                             try:
-                                await send_long(context.bot, student.telegram_id, f"💬 پاسخ سؤال #{q.id}:\n{p[2]}", reply_markup=back_to_panel_markup("STUDENT"))
+                                await send_long(context.bot, student_telegram_id, f"💬 پاسخ سؤال #{q.id}:\n{p[2]}", reply_markup=back_to_panel_markup("STUDENT"))
                                 q.student_notified = True
                                 await s.commit()
                             except Exception:
@@ -3157,7 +3218,12 @@ async def process_state(update, context, u):
                     return True
         except Exception as e:
             log.exception("admin state")
-            await reply_long(update.message, f"❌ خطا: {str(e)}")
+            await reply_long(
+                update.message,
+                f"❌ عملیات انجام نشد: {str(e)}\n\nاطلاعات واردشده حذف نشده است؛ می‌توانید دوباره همان عملیات را انتخاب کنید.",
+                reply_markup=navigation_markup(),
+            )
+            return True
         context.user_data.clear()
         return True
 
@@ -3418,16 +3484,23 @@ async def process_state(update, context, u):
                     q.answer, q.status = answer, "ANSWERED"; await s.commit()
                     student = await s.get(User, q.student_user_id)
                     settings = await get_student_notification_settings(s, q.student_user_id)
-                    if student and student.telegram_id and settings.responses_enabled:
+                    student_telegram_id = await get_notification_telegram_id(s, student.id, student.telegram_id) if student else None
+                    if student and student_telegram_id and settings.responses_enabled:
                         try:
-                            await send_long(context.bot, student.telegram_id, f"💬 پاسخ سؤال #{qid}:\n{answer}", reply_markup=back_to_panel_markup("STUDENT"))
+                            await send_long(context.bot, student_telegram_id, f"💬 پاسخ سؤال #{qid}:\n{answer}", reply_markup=back_to_panel_markup("STUDENT"))
                             q.student_notified = True
                             await s.commit()
                         except Exception:
                             log.exception("assigner question notification failed")
                     await reply_long(update.message, "پاسخ ثبت شد.")
         except Exception as e:
-            await reply_long(update.message, f"❌ خطا: {e}")
+            log.exception("assigner state")
+            await reply_long(
+                update.message,
+                f"❌ عملیات انجام نشد: {e}\n\nاطلاعات واردشده حذف نشده است؛ می‌توانید دوباره همان عملیات را انتخاب کنید.",
+                reply_markup=navigation_markup(),
+            )
+            return True
         context.user_data.clear()
         return True
 
