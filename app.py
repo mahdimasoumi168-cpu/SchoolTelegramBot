@@ -75,9 +75,30 @@ async def acquire_poll_lock():
     if engine.dialect.name != "postgresql":
         return
     conn = await engine.connect()
-    await conn.execute(text("SELECT pg_advisory_lock(:lock_id)"), {"lock_id": POLL_LOCK_ID})
-    POLL_LOCK_CONN = conn
-    log.info("Telegram polling lock acquired")
+    try:
+        # Never let a stale/overlapping Railway instance leave this process
+        # waiting forever before Telegram polling starts.
+        acquired = False
+        for _ in range(30):
+            acquired = bool(await conn.scalar(
+                text("SELECT pg_try_advisory_lock(:lock_id)"),
+                {"lock_id": POLL_LOCK_ID},
+            ))
+            if acquired:
+                break
+            await asyncio.sleep(1)
+        if not acquired:
+            await conn.close()
+            raise RuntimeError(
+                "Telegram polling lock is held by another bot instance; "
+                "refusing to start a second poller."
+            )
+        POLL_LOCK_CONN = conn
+        log.info("Telegram polling lock acquired")
+    except Exception:
+        if POLL_LOCK_CONN is not conn:
+            await conn.close()
+        raise
 
 
 async def release_poll_lock():
@@ -745,8 +766,28 @@ async def notify_pending_admin(context: ContextTypes.DEFAULT_TYPE, u: User):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
+    # /start is an entry point, so it must never inherit a half-finished
+    # workflow from an earlier interaction. Serialize it with other updates
+    # from the same Telegram account to avoid account/session races.
     tg = update.effective_user
+    if tg is None or update.message is None:
+        return
+    async with get_user_lock(tg.id):
+        context.user_data.clear()
+        try:
+            await _start_locked(update, context, tg)
+        except Exception:
+            log.exception("start command failed for tg_id=%s", tg.id)
+            context.user_data.clear()
+            await reply_long(
+                update.message,
+                "❌ در شروع سامانه مشکلی پیش آمد.\n"
+                "اطلاعات حساب شما حذف نشده است. لطفاً چند ثانیه بعد دوباره /start را بزنید.",
+                reply_markup=auth_choice_markup(),
+            )
+
+
+async def _start_locked(update: Update, context: ContextTypes.DEFAULT_TYPE, tg):
     if ADMIN_TELEGRAM_ID and str(tg.id) == ADMIN_TELEGRAM_ID:
         async with SessionLocal() as s:
             # The configured admin Telegram ID is authoritative. Find an
