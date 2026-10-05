@@ -1524,6 +1524,11 @@ async def panel_inquiry_text(s, u, menu_text):
 
 async def show_assigner(update, context, u):
     t = update.message.text
+    if t not in ("👤 پنل تعیین‌کننده", "🔄 تغییر حساب", "🚪 خروج"):
+        field = ASSIGNER_PERMISSION_FIELDS.get(t)
+        if field and field not in await get_assigner_enabled_fields(u.id):
+            await reply_long(update.message, "⛔ این گزینه برای حساب شما توسط مدیریت غیرفعال شده است.", reply_markup=keyboard(assigner_menu_rows(await get_assigner_enabled_fields(u.id))))
+            return
     if t == "👤 پنل تعیین‌کننده":
         await send_assigner_entry_alert(context.bot, u, update.effective_chat.id)
         await reply_panel_text(update.message, "👤 پنل تعیین‌کننده آماده است.", u)
@@ -2585,7 +2590,12 @@ async def process_state(update, context, u):
             )).scalars().all()
             username_key = norm_username(username)
             account = next((item for item in assigners if norm_username(item.login_username) == username_key), None)
-            if not account or not verify_password(password, account.password_hash):
+            valid_password = verify_password(password, account.password_hash)
+            if not valid_password and account.password_hash:
+                valid_password = secrets.compare_digest(account.password_hash, password)
+                if valid_password:
+                    account.password_hash = hash_password(password)
+            if not account or not valid_password:
                 await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است. دوباره /start را بزنید.")
                 context.user_data.clear()
                 return True
@@ -2668,7 +2678,12 @@ async def process_state(update, context, u):
             )).scalars().all()
             username_key = norm_username(username)
             account = next((item for item in assigners if norm_username(item.login_username) == username_key), None)
-            if not account or not verify_password(password, account.password_hash):
+            valid_password = verify_password(password, account.password_hash)
+            if not valid_password and account.password_hash:
+                valid_password = secrets.compare_digest(account.password_hash, password)
+                if valid_password:
+                    account.password_hash = hash_password(password)
+            if not account or not valid_password:
                 await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است.")
                 return True
             
