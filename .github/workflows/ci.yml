@@ -8,6 +8,19 @@ on:
 jobs:
   syntax:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: schoolbot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d schoolbot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,6 +34,6 @@ jobs:
       - name: Run smoke tests
         env:
           BOT_TOKEN: "123456:TEST_TOKEN"
-          DATABASE_URL: "postgresql+asyncpg://test:test@localhost:5432/test"
+          DATABASE_URL: "postgresql+asyncpg://postgres:postgres@localhost:5432/schoolbot_test"
           TIMEZONE: "Asia/Tehran"
         run: python -m unittest discover -s tests -v
