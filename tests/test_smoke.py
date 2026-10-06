@@ -51,9 +51,9 @@ class SchoolBotSmokeTests(unittest.TestCase):
         self.assertIn("📸 ارسال تکالیف ریاضی", labels)
         self.assertNotIn("📸 ارسال تکالیف ریاضی سالمی", labels)
 
-    def test_primary_railway_guard_defaults_to_enabled(self):
-        self.assertTrue(app.ENFORCE_PRIMARY_RAILWAY_SERVICE)
-        self.assertEqual(app.PRIMARY_RAILWAY_SERVICE_ID, "5a6ef693-0b2b-4f18-bd9c-e3ac1cb4bb81")
+    def test_primary_railway_guard_is_opt_in(self):
+        self.assertFalse(app.ENFORCE_PRIMARY_RAILWAY_SERVICE)
+        self.assertEqual(app.PRIMARY_RAILWAY_SERVICE_ID, "")
 
     def test_telegram_button_styles_are_valid(self):
         self.assertIn(app.button_style("❌ حذف"), {"primary", "success", "danger"})
