@@ -42,12 +42,9 @@ PRIMARY_RAILWAY_SERVICE_NAME = os.getenv("PRIMARY_RAILWAY_SERVICE_NAME", "school
 RAILWAY_SERVICE_NAME = os.getenv("RAILWAY_SERVICE_NAME", "").strip()
 # Stable Railway service ID for the intended production bot. The environment
 # variable can override it if the project is recreated.
-PRIMARY_RAILWAY_SERVICE_ID = os.getenv(
-    "PRIMARY_RAILWAY_SERVICE_ID",
-    "5a6ef693-0b2b-4f18-bd9c-e3ac1cb4bb81",
-).strip()
+PRIMARY_RAILWAY_SERVICE_ID = os.getenv("PRIMARY_RAILWAY_SERVICE_ID", "").strip()
 RAILWAY_SERVICE_ID = os.getenv("RAILWAY_SERVICE_ID", "").strip()
-ENFORCE_PRIMARY_RAILWAY_SERVICE = os.getenv("ENFORCE_PRIMARY_RAILWAY_SERVICE", "true").strip().lower() in ("1", "true", "yes")
+ENFORCE_PRIMARY_RAILWAY_SERVICE = os.getenv("ENFORCE_PRIMARY_RAILWAY_SERVICE", "false").strip().lower() in ("1", "true", "yes")
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
