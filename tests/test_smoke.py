@@ -55,6 +55,21 @@ class SchoolBotSmokeTests(unittest.TestCase):
         self.assertFalse(app.ENFORCE_PRIMARY_RAILWAY_SERVICE)
         self.assertEqual(app.PRIMARY_RAILWAY_SERVICE_ID, "")
 
+    def test_database_bootstrap_and_migrations(self):
+        import asyncio
+
+        async def run():
+            await app.init_db()
+            async with app.SessionLocal() as session:
+                value = await session.scalar(app.select(1))
+                self.assertEqual(value, 1)
+                self.assertIsNotNone(await session.get(app.StudentPermissionSettings, -1))
+            await app.engine.dispose()
+
+        # The negative ID lookup above is deliberately read-only; the important
+        # assertion is that init_db completes all schema creation/migrations.
+        asyncio.run(run())
+
     def test_telegram_button_styles_are_valid(self):
         self.assertIn(app.button_style("❌ حذف"), {"primary", "success", "danger"})
         self.assertIn(app.button_style("✅ ثبت"), {"primary", "success", "danger"})
