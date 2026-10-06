@@ -476,6 +476,12 @@ ADMIN_MENU = [
 
 ROLE_NAMES = {"STUDENT": "دانش‌آموز", "ASSIGNER": "تعیین‌کننده", "ADMIN": "مدیریت", "PENDING": "در انتظار تأیید"}
 
+MENU_CALLBACK_LABELS = {
+    menu_label_code(label): label
+    for row in (STUDENT_MENU + ASSIGNER_MENU + ADMIN_MENU)
+    for label in row
+}
+
 
 async def bind_telegram_account(session, account, telegram_id: int):
     """Allow one school account to be used from multiple Telegram accounts."""
@@ -548,9 +554,13 @@ def styled_button(label, callback_data):
     return InlineKeyboardButton(label, callback_data=callback_data, **({"style": style} if style else {}))
 
 
+def menu_label_code(label: str) -> str:
+    return hashlib.sha256((label or "").encode("utf-8")).hexdigest()[:12]
+
+
 def keyboard(rows):
     return InlineKeyboardMarkup(
-        [[styled_button(label, f"menu:{label}") for label in row] for row in rows]
+        [[styled_button(label, f"m:{menu_label_code(label)}") for label in row] for row in rows]
     )
 
 
@@ -1298,9 +1308,15 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         await process_state(callback_update(query, action), context, u)
         return
 
-    if not data.startswith("menu:"):
+    if data.startswith("m:"):
+        text = MENU_CALLBACK_LABELS.get(data[2:])
+        if text is None:
+            await reply_long(query.message, "این دکمه قدیمی یا نامعتبر است. لطفاً «بازگشت به پنل» را بزنید.", reply_markup=navigation_markup())
+            return
+    elif data.startswith("menu:"):
+        text = data[5:]
+    else:
         return
-    text = data[5:]
     if text == "__RESTART__":
         context.user_data.clear()
         u = await db_user(query.from_user.id)
