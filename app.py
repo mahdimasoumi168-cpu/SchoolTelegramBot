@@ -35,6 +35,12 @@ ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Tehran").strip()
 
+# Railway supplies RAILWAY_SERVICE_NAME to every deployment. Only the intended
+# production bot service is allowed to start Telegram polling. This prevents
+# old/duplicate Railway services from stealing the PostgreSQL polling lock.
+PRIMARY_RAILWAY_SERVICE_NAME = os.getenv("PRIMARY_RAILWAY_SERVICE_NAME", "school-bot-app").strip()
+RAILWAY_SERVICE_NAME = os.getenv("RAILWAY_SERVICE_NAME", "").strip()
+
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
 elif DATABASE_URL.startswith("postgresql://"):
@@ -4008,6 +4014,17 @@ async def post_init(app: Application):
 
 
 def main():
+    # On Railway, duplicate services connected to the same GitHub repository
+    # must not start a second Telegram poller. They can remain deployed while
+    # being harmlessly disabled until removed from Railway.
+    if RAILWAY_SERVICE_NAME and PRIMARY_RAILWAY_SERVICE_NAME and RAILWAY_SERVICE_NAME != PRIMARY_RAILWAY_SERVICE_NAME:
+        log.warning(
+            "Telegram polling disabled: Railway service %r is not the primary service %r.",
+            RAILWAY_SERVICE_NAME,
+            PRIMARY_RAILWAY_SERVICE_NAME,
+        )
+        return
+
     app = (
         Application.builder()
         .token(BOT_TOKEN)
