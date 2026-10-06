@@ -46,6 +46,14 @@ class SchoolBotSmokeTests(unittest.TestCase):
         self.assertIn("🔄 تغییر حساب", labels)
         self.assertIn("🚪 خروج", labels)
 
+    def test_math_homework_button_has_no_salami_suffix(self):
+        labels = [label for row in app.STUDENT_MENU for label in row]
+        self.assertIn("📸 ارسال تکالیف ریاضی", labels)
+        self.assertNotIn("📸 ارسال تکالیف ریاضی سالمی", labels)
+
+    def test_primary_railway_guard_defaults_to_enabled(self):
+        self.assertTrue(app.ENFORCE_PRIMARY_RAILWAY_SERVICE)
+
     def test_telegram_button_styles_are_valid(self):
         self.assertIn(app.button_style("❌ حذف"), {"primary", "success", "danger"})
         self.assertIn(app.button_style("✅ ثبت"), {"primary", "success", "danger"})
