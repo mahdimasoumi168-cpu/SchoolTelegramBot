@@ -42,7 +42,13 @@ PRIMARY_RAILWAY_SERVICE_NAME = os.getenv("PRIMARY_RAILWAY_SERVICE_NAME", "school
 RAILWAY_SERVICE_NAME = os.getenv("RAILWAY_SERVICE_NAME", "").strip()
 # Stable Railway service ID for the intended production bot. The environment
 # variable can override it if the project is recreated.
-PRIMARY_RAILWAY_SERVICE_ID = os.getenv("PRIMARY_RAILWAY_SERVICE_ID", "").strip()
+# The production Railway service is known and fixed. This prevents any old
+# Railway service connected to the same GitHub repository from becoming a
+# second Telegram poller when Railway injects RAILWAY_SERVICE_ID automatically.
+PRIMARY_RAILWAY_SERVICE_ID = os.getenv(
+    "PRIMARY_RAILWAY_SERVICE_ID",
+    "5a6ef693-0b2b-4f18-bd9c-e3ac1cb4bb81",
+).strip()
 RAILWAY_SERVICE_ID = os.getenv("RAILWAY_SERVICE_ID", "").strip()
 ENFORCE_PRIMARY_RAILWAY_SERVICE = os.getenv("ENFORCE_PRIMARY_RAILWAY_SERVICE", "true").strip().lower() in ("1", "true", "yes")
 
@@ -4010,12 +4016,19 @@ async def post_shutdown(app: Application):
 
 async def post_init(app: Application):
     await init_db()
-    # Hold the polling lock only after database initialization. This is the
-    # single-instance guard for Telegram polling, not a migration lock.
+
+    # Verify the bot token and Telegram API before starting polling. This turns
+    # a silent "start does nothing" deployment into a clear startup failure.
+    me = await app.bot.get_me()
+    log.info("Telegram bot authenticated: @%s (id=%s)", me.username, me.id)
+
+    # Hold the polling lock only after database initialization and Telegram
+    # authentication. This is the single-instance guard for Telegram polling,
+    # not a migration lock.
     await acquire_poll_lock()
     if app.job_queue:
         app.job_queue.run_repeating(scheduled_job, interval=60, first=10)
-    log.info("School bot initialized")
+    log.info("School bot initialized and ready to receive /start")
 
 
 def main():
