@@ -19,6 +19,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from migrate import upgrade_database
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram.error import BadRequest
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 )
@@ -712,7 +713,7 @@ async def get_notification_telegram_id(session, user_id: int, legacy_telegram_id
     linked = await session.scalar(
         select(UserTelegramAccount.telegram_id)
         .where(UserTelegramAccount.user_id == user_id)
-        .order_by(UserTelegramAccount.created_at.desc(), UserTelegramAccount.id.desc())
+        .order_by(UserTelegramAccount.id.desc())
         .limit(1)
     )
     if linked is not None:
@@ -850,6 +851,16 @@ async def safe_answer_callback(query):
         await query.answer()
     except Exception:
         log.debug("callback acknowledgement failed", exc_info=True)
+
+
+async def safe_edit_message(query, text, **kwargs):
+    """Edit a callback message without turning harmless Telegram races into a bot error."""
+    try:
+        return await query.edit_message_text(text, **kwargs)
+    except BadRequest as exc:
+        if "message is not modified" in str(exc).lower() or "message_not_modified" in str(exc).lower():
+            return None
+        raise
 
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
