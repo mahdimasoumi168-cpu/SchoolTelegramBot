@@ -35,11 +35,12 @@ ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Tehran").strip()
 
-# Railway supplies RAILWAY_SERVICE_NAME to every deployment. Only the intended
-# production bot service is allowed to start Telegram polling. This prevents
-# old/duplicate Railway services from stealing the PostgreSQL polling lock.
-PRIMARY_RAILWAY_SERVICE_NAME = os.getenv("PRIMARY_RAILWAY_SERVICE_NAME", "school-bot-app").strip()
+# Duplicate Railway services are controlled by PostgreSQL's advisory polling
+# lock. Do not hard-code a service name as a startup requirement: a renamed
+# production service must still be able to start the bot.
+PRIMARY_RAILWAY_SERVICE_NAME = os.getenv("PRIMARY_RAILWAY_SERVICE_NAME", "").strip()
 RAILWAY_SERVICE_NAME = os.getenv("RAILWAY_SERVICE_NAME", "").strip()
+ENFORCE_PRIMARY_RAILWAY_SERVICE = os.getenv("ENFORCE_PRIMARY_RAILWAY_SERVICE", "false").strip().lower() in ("1", "true", "yes")
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
@@ -4014,10 +4015,15 @@ async def post_init(app: Application):
 
 
 def main():
-    # On Railway, duplicate services connected to the same GitHub repository
-    # must not start a second Telegram poller. They can remain deployed while
-    # being harmlessly disabled until removed from Railway.
-    if RAILWAY_SERVICE_NAME and PRIMARY_RAILWAY_SERVICE_NAME and RAILWAY_SERVICE_NAME != PRIMARY_RAILWAY_SERVICE_NAME:
+    # PostgreSQL advisory locking is the authoritative duplicate-service guard.
+    # An optional explicit service-name guard is available for deployments that
+    # want non-primary Railway services to exit before initializing Telegram.
+    if (
+        ENFORCE_PRIMARY_RAILWAY_SERVICE
+        and RAILWAY_SERVICE_NAME
+        and PRIMARY_RAILWAY_SERVICE_NAME
+        and RAILWAY_SERVICE_NAME != PRIMARY_RAILWAY_SERVICE_NAME
+    ):
         log.warning(
             "Telegram polling disabled: Railway service %r is not the primary service %r.",
             RAILWAY_SERVICE_NAME,
