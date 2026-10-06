@@ -40,14 +40,17 @@ TIMEZONE = os.getenv("TIMEZONE", "Asia/Tehran").strip()
 # production service must still be able to start the bot.
 PRIMARY_RAILWAY_SERVICE_NAME = os.getenv("PRIMARY_RAILWAY_SERVICE_NAME", "school-bot-app").strip()
 RAILWAY_SERVICE_NAME = os.getenv("RAILWAY_SERVICE_NAME", "").strip()
-# Optional Railway service guard. It is intentionally OFF by default:
-# a hard-coded service UUID can silently disable the real bot after Railway
-# recreates/clones a service. PostgreSQL advisory locking below is the
-# authoritative duplicate-poller protection.
-PRIMARY_RAILWAY_SERVICE_ID = os.getenv("PRIMARY_RAILWAY_SERVICE_ID", "").strip()
+# The current production Railway service ID. It is overridable so the
+# protection remains safe if the production service is ever recreated.
+PRIMARY_RAILWAY_SERVICE_ID = os.getenv(
+    "PRIMARY_RAILWAY_SERVICE_ID",
+    "5a6ef693-0b2b-4f18-bd9c-e3ac1cb4bb81",
+).strip()
 RAILWAY_SERVICE_ID = os.getenv("RAILWAY_SERVICE_ID", "").strip()
+# Keep duplicate Railway services from becoming Telegram pollers. The
+# PostgreSQL advisory lock remains a second safety layer.
 ENFORCE_PRIMARY_RAILWAY_SERVICE = os.getenv(
-    "ENFORCE_PRIMARY_RAILWAY_SERVICE", "false"
+    "ENFORCE_PRIMARY_RAILWAY_SERVICE", "true"
 ).strip().lower() in ("1", "true", "yes")
 
 if DATABASE_URL.startswith("postgres://"):
