@@ -78,6 +78,17 @@ class SchoolBotSmokeTests(unittest.TestCase):
         self.assertIn(app.button_style("✅ ثبت"), {"primary", "success", "danger"})
         self.assertIn(app.button_style("➡️ بعدی"), {"primary", "success", "danger"})
 
+    def test_all_menu_callback_ids_fit_telegram_limit(self):
+        for row in app.STUDENT_MENU + app.ASSIGNER_MENU + app.ADMIN_MENU:
+            for label in row:
+                callback = f"m:{app.menu_label_code(label)}"
+                self.assertLessEqual(len(callback.encode("utf-8")), 64)
+
+    def test_long_persian_admin_labels_have_compact_callbacks(self):
+        label = "🎛️ تنظیم دکمه‌های تعیین‌کنندگان"
+        self.assertGreater(len(("menu:" + label).encode("utf-8")), 64)
+        self.assertLessEqual(len(("m:" + app.menu_label_code(label)).encode("utf-8")), 64)
+
 
 if __name__ == "__main__":
     unittest.main()
