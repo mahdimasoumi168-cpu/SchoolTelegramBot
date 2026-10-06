@@ -40,17 +40,15 @@ TIMEZONE = os.getenv("TIMEZONE", "Asia/Tehran").strip()
 # production service must still be able to start the bot.
 PRIMARY_RAILWAY_SERVICE_NAME = os.getenv("PRIMARY_RAILWAY_SERVICE_NAME", "school-bot-app").strip()
 RAILWAY_SERVICE_NAME = os.getenv("RAILWAY_SERVICE_NAME", "").strip()
-# Stable Railway service ID for the intended production bot. The environment
-# variable can override it if the project is recreated.
-# The production Railway service is known and fixed. This prevents any old
-# Railway service connected to the same GitHub repository from becoming a
-# second Telegram poller when Railway injects RAILWAY_SERVICE_ID automatically.
-PRIMARY_RAILWAY_SERVICE_ID = os.getenv(
-    "PRIMARY_RAILWAY_SERVICE_ID",
-    "5a6ef693-0b2b-4f18-bd9c-e3ac1cb4bb81",
-).strip()
+# Optional Railway service guard. It is intentionally OFF by default:
+# a hard-coded service UUID can silently disable the real bot after Railway
+# recreates/clones a service. PostgreSQL advisory locking below is the
+# authoritative duplicate-poller protection.
+PRIMARY_RAILWAY_SERVICE_ID = os.getenv("PRIMARY_RAILWAY_SERVICE_ID", "").strip()
 RAILWAY_SERVICE_ID = os.getenv("RAILWAY_SERVICE_ID", "").strip()
-ENFORCE_PRIMARY_RAILWAY_SERVICE = os.getenv("ENFORCE_PRIMARY_RAILWAY_SERVICE", "true").strip().lower() in ("1", "true", "yes")
+ENFORCE_PRIMARY_RAILWAY_SERVICE = os.getenv(
+    "ENFORCE_PRIMARY_RAILWAY_SERVICE", "false"
+).strip().lower() in ("1", "true", "yes")
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
@@ -4033,22 +4031,23 @@ async def post_init(app: Application):
 
 def main():
     # PostgreSQL advisory locking is the authoritative duplicate-service guard.
-    # An optional explicit service-name guard is available for deployments that
-    # want non-primary Railway services to exit before initializing Telegram.
-    if (
-        ENFORCE_PRIMARY_RAILWAY_SERVICE
-        and (
-            (RAILWAY_SERVICE_ID and PRIMARY_RAILWAY_SERVICE_ID and RAILWAY_SERVICE_ID != PRIMARY_RAILWAY_SERVICE_ID)
-            or
-            (not RAILWAY_SERVICE_ID and RAILWAY_SERVICE_NAME and PRIMARY_RAILWAY_SERVICE_NAME and RAILWAY_SERVICE_NAME != PRIMARY_RAILWAY_SERVICE_NAME)
-        )
-    ):
-        log.warning(
-            "Telegram polling disabled: Railway service %r is not the primary service %r.",
-            RAILWAY_SERVICE_NAME,
-            PRIMARY_RAILWAY_SERVICE_NAME,
-        )
-        return
+    # The optional Railway guard is only applied when an explicit primary ID
+    # or service name has been configured by the deployment owner.
+    if ENFORCE_PRIMARY_RAILWAY_SERVICE:
+        service_mismatch = False
+        if RAILWAY_SERVICE_ID and PRIMARY_RAILWAY_SERVICE_ID:
+            service_mismatch = RAILWAY_SERVICE_ID != PRIMARY_RAILWAY_SERVICE_ID
+        elif RAILWAY_SERVICE_NAME and PRIMARY_RAILWAY_SERVICE_NAME:
+            service_mismatch = RAILWAY_SERVICE_NAME != PRIMARY_RAILWAY_SERVICE_NAME
+        if service_mismatch:
+            log.warning(
+                "Telegram polling disabled: Railway service %r/%r is not the configured primary %r/%r.",
+                RAILWAY_SERVICE_NAME,
+                RAILWAY_SERVICE_ID,
+                PRIMARY_RAILWAY_SERVICE_NAME,
+                PRIMARY_RAILWAY_SERVICE_ID,
+            )
+            return
 
     app = (
         Application.builder()
