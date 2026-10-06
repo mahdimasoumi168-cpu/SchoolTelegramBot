@@ -38,9 +38,16 @@ TIMEZONE = os.getenv("TIMEZONE", "Asia/Tehran").strip()
 # Duplicate Railway services are controlled by PostgreSQL's advisory polling
 # lock. Do not hard-code a service name as a startup requirement: a renamed
 # production service must still be able to start the bot.
-PRIMARY_RAILWAY_SERVICE_NAME = os.getenv("PRIMARY_RAILWAY_SERVICE_NAME", "").strip()
+PRIMARY_RAILWAY_SERVICE_NAME = os.getenv("PRIMARY_RAILWAY_SERVICE_NAME", "school-bot-app").strip()
 RAILWAY_SERVICE_NAME = os.getenv("RAILWAY_SERVICE_NAME", "").strip()
-ENFORCE_PRIMARY_RAILWAY_SERVICE = os.getenv("ENFORCE_PRIMARY_RAILWAY_SERVICE", "false").strip().lower() in ("1", "true", "yes")
+# Stable Railway service ID for the intended production bot. The environment
+# variable can override it if the project is recreated.
+PRIMARY_RAILWAY_SERVICE_ID = os.getenv(
+    "PRIMARY_RAILWAY_SERVICE_ID",
+    "5a6ef693-0b2b-4f18-bd9c-e3ac1cb4bb81",
+).strip()
+RAILWAY_SERVICE_ID = os.getenv("RAILWAY_SERVICE_ID", "").strip()
+ENFORCE_PRIMARY_RAILWAY_SERVICE = os.getenv("ENFORCE_PRIMARY_RAILWAY_SERVICE", "true").strip().lower() in ("1", "true", "yes")
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
@@ -4020,9 +4027,11 @@ def main():
     # want non-primary Railway services to exit before initializing Telegram.
     if (
         ENFORCE_PRIMARY_RAILWAY_SERVICE
-        and RAILWAY_SERVICE_NAME
-        and PRIMARY_RAILWAY_SERVICE_NAME
-        and RAILWAY_SERVICE_NAME != PRIMARY_RAILWAY_SERVICE_NAME
+        and (
+            (RAILWAY_SERVICE_ID and PRIMARY_RAILWAY_SERVICE_ID and RAILWAY_SERVICE_ID != PRIMARY_RAILWAY_SERVICE_ID)
+            or
+            (not RAILWAY_SERVICE_ID and RAILWAY_SERVICE_NAME and PRIMARY_RAILWAY_SERVICE_NAME and RAILWAY_SERVICE_NAME != PRIMARY_RAILWAY_SERVICE_NAME)
+        )
     ):
         log.warning(
             "Telegram polling disabled: Railway service %r is not the primary service %r.",
