@@ -2239,7 +2239,7 @@ async def render_admin_assigner_permission_settings(query, target_user_id: int):
         f"🔑 نام کاربری: {target.login_username or 'ثبت نشده'}\n\n"
         "با انتخاب هر گزینه، همان دکمه برای این تعیین‌کننده فعال یا غیرفعال می‌شود."
     )
-    await query.edit_message_text(body, reply_markup=InlineKeyboardMarkup(buttons))
+    await safe_edit_message(query, body, reply_markup=InlineKeyboardMarkup(buttons))
 
 async def render_admin_student_permission_list(message, page: int = 0):
     page_size = 25
@@ -2276,14 +2276,14 @@ async def render_admin_student_permission_settings(query, target_user_id: int):
     buttons.append([InlineKeyboardButton("⬅️ انتخاب دانش‌آموز", callback_data="studentperm:list:0", style="primary")])
     buttons.append([InlineKeyboardButton("⚙️ پنل مدیریت", callback_data="menu:__BACK_PANEL__", style="primary")])
     body = f"🎛️ تنظیم دکمه‌های دانش‌آموز\n\n👨‍🎓 {target.name or 'بدون نام'}\n\nبا انتخاب هر گزینه، همان دکمه برای این دانش‌آموز فعال یا غیرفعال می‌شود."
-    await query.edit_message_text(body, reply_markup=InlineKeyboardMarkup(buttons))
+    await safe_edit_message(query, body, reply_markup=InlineKeyboardMarkup(buttons))
 
 async def render_admin_notification_settings(query, target_user_id: int):
     async with SessionLocal() as s:
         target = await s.get(User, target_user_id)
         student = (await s.execute(select(Student).where(Student.user_id == target_user_id))).scalar_one_or_none()
         if not target or target.role != "STUDENT" or not student:
-            await query.edit_message_text("این دانش‌آموز پیدا نشد.")
+            await safe_edit_message(query, "این دانش‌آموز پیدا نشد.")
             return
         settings = await get_student_notification_settings(s, target_user_id)
         await s.commit()
@@ -2295,7 +2295,7 @@ async def render_admin_notification_settings(query, target_user_id: int):
             f"برای روشن یا خاموش کردن هر اعلان، دکمه مربوط را بزنید:"
         )
         markup = notification_settings_markup(target_user_id, settings)
-    await query.edit_message_text(body, reply_markup=markup)
+    await safe_edit_message(query, body, reply_markup=markup)
 
 
 async def render_admin_notification_list(query, page: int = 0):
@@ -2339,7 +2339,7 @@ async def render_admin_notification_list(query, page: int = 0):
     body = "🔔 تنظیم اعلان‌های دانش‌آموزان\n\nدانش‌آموز موردنظر را انتخاب کنید:"
     if not rows:
         body += "\n\nهنوز دانش‌آموزی ثبت نشده است."
-    await query.edit_message_text(body, reply_markup=InlineKeyboardMarkup(buttons))
+    await safe_edit_message(query, body, reply_markup=InlineKeyboardMarkup(buttons))
 
 
 async def send_admin_notification_list(message, page: int = 0):
