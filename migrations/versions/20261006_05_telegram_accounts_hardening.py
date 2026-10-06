@@ -5,7 +5,7 @@ multi-account lookup/indexes stable for existing production databases.
 """
 from alembic import op
 
-revision = "20261006_05_telegram_accounts_hardening"
+revision = "20261006_05_tg_accounts"
 down_revision = "20261006_04_student_permissions"
 branch_labels = None
 depends_on = None
