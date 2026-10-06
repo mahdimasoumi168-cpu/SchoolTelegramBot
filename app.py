@@ -44,7 +44,7 @@ RAILWAY_SERVICE_NAME = os.getenv("RAILWAY_SERVICE_NAME", "").strip()
 # variable can override it if the project is recreated.
 PRIMARY_RAILWAY_SERVICE_ID = os.getenv("PRIMARY_RAILWAY_SERVICE_ID", "").strip()
 RAILWAY_SERVICE_ID = os.getenv("RAILWAY_SERVICE_ID", "").strip()
-ENFORCE_PRIMARY_RAILWAY_SERVICE = os.getenv("ENFORCE_PRIMARY_RAILWAY_SERVICE", "false").strip().lower() in ("1", "true", "yes")
+ENFORCE_PRIMARY_RAILWAY_SERVICE = os.getenv("ENFORCE_PRIMARY_RAILWAY_SERVICE", "true").strip().lower() in ("1", "true", "yes")
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
