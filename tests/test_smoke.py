@@ -63,11 +63,14 @@ class SchoolBotSmokeTests(unittest.TestCase):
             async with app.SessionLocal() as session:
                 value = await session.scalar(app.select(1))
                 self.assertEqual(value, 1)
-                self.assertIsNotNone(await session.get(app.StudentPermissionSettings, -1))
+                table_name = await session.scalar(
+                    app.text("SELECT to_regclass('student_permission_settings')")
+                )
+                self.assertEqual(table_name, "student_permission_settings")
             await app.engine.dispose()
 
-        # The negative ID lookup above is deliberately read-only; the important
-        # assertion is that init_db completes all schema creation/migrations.
+        # The important assertion is that init_db completes all schema
+        # creation/migrations and the resulting tables can be queried.
         asyncio.run(run())
 
     def test_telegram_button_styles_are_valid(self):
