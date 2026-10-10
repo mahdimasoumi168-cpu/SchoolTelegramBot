@@ -408,7 +408,6 @@ ASSIGNER_PERMISSION_FIELDS = {
     "👨‍🎓 دانش‌آموزان": "students_enabled",
     "📚 درس‌ها": "lessons_enabled",
     "📝 تکالیف": "assignments_enabled",
-    "📤 ارسال تکالیف ریاضی": "assignments_enabled",
     "📸 ارسال تکالیف ریاضی": "assignments_enabled",
     "📢 ارسال اطلاعیه": "announcements_enabled",
     "📅 برنامه هفتگی": "schedule_enabled",
@@ -461,7 +460,7 @@ ASSIGNER_MENU = [
     ["👤 پنل تعیین‌کننده", "👨‍🎓 دانش‌آموزان"],
     ["📚 درس‌ها", "📝 تکالیف"],
     ["📥 تأیید تکالیف استاد سالمی", "📥 تأیید تکالیف استاد طلعتی"],
-    ["📤 ارسال تکالیف ریاضی", "📸 ارسال تکالیف ریاضی"],
+    ["📸 ارسال تکالیف ریاضی"],
     ["📢 ارسال اطلاعیه", "📅 برنامه هفتگی"],
     ["📝 امتحانات", "📖 جزوات"],
     ["❓ سؤالات", "🔔 اطلاعیه فردا"],
@@ -477,7 +476,8 @@ ADMIN_MENU = [
     ["📝 مدیریت امتحانات", "📖 مدیریت جزوات"],
     ["📢 مدیریت اطلاعیه‌ها", "🔔 اطلاعیه فردا"],
     ["❓ مدیریت سؤالات", "👥 مدیریت کاربران"],
-    ["📊 گزارش‌ها", "📨 ارسال پیام همگانی"],
+    ["📊 گزارش‌ها", "📊 آمار تکالیف ریاضی"],
+    ["📨 ارسال پیام همگانی"],
     ["🔔 ارسال اعلان", "🔐 مدیریت دسترسی‌ها"],
     ["🗂️ مدیریت فایل‌ها", "📋 گزارش فعالیت‌ها"],
     ["🕐 تاریخچه تغییرات", "⚙️ تنظیمات بات"],
@@ -1949,13 +1949,6 @@ async def show_assigner(update, context, u):
         await send_submission_list(update.message, u, 0, "استاد سالمی")
     elif t == "📥 تأیید تکالیف استاد طلعتی":
         await send_submission_list(update.message, u, 0, "استاد طلعتی")
-    elif t == "📤 ارسال تکالیف ریاضی":
-        async with SessionLocal() as s:
-            preview = await panel_inquiry_text(s, u, "📝 تکالیف")
-            if preview:
-                await reply_panel_text(update.message, preview, u)
-        context.user_data["state"] = "assigner_math_assignment"
-        await reply_long(update.message, "📤 ارسال تکالیف ریاضی\n\nاز دکمه‌های «افزودن»، «ویرایش» یا «حذف» استفاده کنید. این بخش فقط درس‌هایی را می‌پذیرد که نام درس یا استاد آن‌ها شامل «ریاضی» باشد. با افزودن تکلیف، اطلاع‌رسانی برای کلاس مجاز ارسال می‌شود.")
     elif t == "👨‍🎓 دانش‌آموزان":
         async with SessionLocal() as s:
             access = (await s.execute(select(Access).where(Access.assigner_user_id == u.id))).scalars().all()
@@ -2155,6 +2148,65 @@ async def show_admin(update, context, u):
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_files"
         await reply_long(update.message, "🗂️ مدیریت فایل‌ها\n\nبرای فهرست، دکمه «نمایش» و برای حذف، دکمه «حذف» را انتخاب کنید؛ شناسه فایل را در پیام بعدی می‌گیرم.")
+    elif t == "📊 آمار تکالیف ریاضی":
+        async with SessionLocal() as s:
+            now_local = datetime.now(TZ)
+            day_start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end_local = day_start_local + timedelta(days=1)
+            day_start_utc = day_start_local.astimezone(timezone.utc)
+            day_end_utc = day_end_local.astimezone(timezone.utc)
+
+            total = int(await s.scalar(select(func.count(HomeworkSubmission.id))) or 0)
+            today = int(await s.scalar(select(func.count(HomeworkSubmission.id)).where(
+                HomeworkSubmission.created_at >= day_start_utc,
+                HomeworkSubmission.created_at < day_end_utc,
+            )) or 0)
+
+            grouped = (await s.execute(
+                select(HomeworkSubmission.teacher_name, HomeworkSubmission.status, func.count(HomeworkSubmission.id))
+                .group_by(HomeworkSubmission.teacher_name, HomeworkSubmission.status)
+                .order_by(HomeworkSubmission.teacher_name, HomeworkSubmission.status)
+            )).all()
+            by_class = (await s.execute(
+                select(ClassRoom.name, func.count(HomeworkSubmission.id))
+                .join(HomeworkSubmission, HomeworkSubmission.class_id == ClassRoom.id)
+                .group_by(ClassRoom.id, ClassRoom.name)
+                .order_by(func.count(HomeworkSubmission.id).desc(), ClassRoom.name)
+            )).all()
+
+        status_totals = {}
+        teacher_totals = {}
+        for teacher_name, status, count in grouped:
+            teacher = teacher_name or "استاد مشخص نشده"
+            status_totals[status] = status_totals.get(status, 0) + int(count)
+            teacher_totals[teacher] = teacher_totals.get(teacher, 0) + int(count)
+
+        lines = [
+            "📊 آمار تکالیف ریاضی",
+            "",
+            f"🧮 مجموع تکالیف ثبت‌شده: {total}",
+            f"📅 ارسال‌های امروز: {today}",
+            "",
+            "👨‍🏫 آمار به تفکیک استاد:",
+        ]
+        for teacher in ("استاد سالمی", "استاد طلعتی"):
+            count = teacher_totals.get(teacher, 0)
+            lines.append(f"• {teacher}: {count}")
+            teacher_rows = [(status, n) for name, status, n in grouped if (name or "استاد مشخص نشده") == teacher]
+            for status, n in teacher_rows:
+                lines.append(f"   - {submission_status_label(status)}: {int(n)}")
+        other_teachers = [name for name in teacher_totals if name not in ("استاد سالمی", "استاد طلعتی")]
+        for teacher in sorted(other_teachers):
+            lines.append(f"• {teacher}: {teacher_totals[teacher]}")
+
+        lines.extend(["", "📌 آمار بر اساس وضعیت:"])
+        for status in ("PENDING", "COMPLETE", "INCOMPLETE", "INCORRECT", "APPROVED", "REJECTED"):
+            if status_totals.get(status, 0):
+                lines.append(f"• {submission_status_label(status)}: {status_totals[status]}")
+
+        lines.extend(["", "🏫 آمار به تفکیک کلاس:"])
+        lines.extend([f"• {name}: {int(count)}" for name, count in by_class[:15]] or ["• هنوز تکلیفی ثبت نشده است."])
+        await reply_panel_text(update.message, "\n".join(lines), u)
     elif t == "🎓 شناسه تلگرام استاد طلعتی":
         current_teacher_id = await get_system_setting("talati_teacher_telegram_id")
         context.user_data["state"] = "admin_talati_report_id"
