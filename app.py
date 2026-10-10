@@ -1247,12 +1247,22 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                 except Exception:
                     log.exception("failed to show submission photo %s", submission_id)
                     await reply_long(query.message, f"⚠️ نمایش یکی از عکس‌های تکلیف #{submission_id} ناموفق بود.")
-            await reply_long(query.message, "نتیجه بررسی را انتخاب کنید:", reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ تأیید تکلیف", callback_data=f"submission:approve:{submission_id}" + (f":{teacher_key}" if teacher_key else ""), style="success")],
-                [InlineKeyboardButton("❌ رد تکلیف", callback_data=f"submission:reject:{submission_id}" + (f":{teacher_key}" if teacher_key else ""), style="danger")],
+            if item.teacher_name == "استاد طلعتی":
+                review_buttons = [
+                    [InlineKeyboardButton("✅ تکلیف کامل", callback_data=f"report:status:{submission_id}:COMPLETE", style="success")],
+                    [InlineKeyboardButton("🟡 تکلیف ناقص", callback_data=f"report:status:{submission_id}:INCOMPLETE", style="primary")],
+                    [InlineKeyboardButton("❌ تکلیف نادرست", callback_data=f"report:status:{submission_id}:INCORRECT", style="danger")],
+                ]
+            else:
+                review_buttons = [
+                    [InlineKeyboardButton("✅ تأیید تکلیف", callback_data=f"submission:approve:{submission_id}" + (f":{teacher_key}" if teacher_key else ""), style="success")],
+                    [InlineKeyboardButton("❌ رد تکلیف", callback_data=f"submission:reject:{submission_id}" + (f":{teacher_key}" if teacher_key else ""), style="danger")],
+                ]
+            review_buttons.extend([
                 [InlineKeyboardButton("↩️ بازگشت به فهرست", callback_data=f"submission:list:{teacher_key}:0" if teacher_key else "submission:list", style="primary")],
                 [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
-            ]))
+            ])
+            await reply_long(query.message, "نتیجه بررسی را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(review_buttons))
             return
         if action == "approve" and len(parts) in (3, 4):
             teacher_key = parts[3] if len(parts) == 4 and parts[3] in ("salemi", "talati") else None
@@ -2513,7 +2523,7 @@ async def run_daily_maintenance(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(TZ)
     today = now.date().isoformat()
     # Once daily, during the 03:00 hour; a stored date prevents duplicate work.
-    if now.hour == 3:
+    if 3 <= now.hour < 5:
         last_cleanup = await get_system_setting("last_temporary_cleanup_date")
         if last_cleanup != today:
             await cleanup_temporary_school_data()
