@@ -2465,8 +2465,9 @@ async def send_talati_daily_report(bot, report_date):
         sent_lines = []
         buttons = []
         for item, student in day_submissions:
+            role_tag = " (تعیین‌کننده)" if student.role == "ASSIGNER" else ""
             sent_lines.append(
-                f"• {student.name or 'بدون نام'} | {format_jalali_dt(item.created_at)}"
+                f"• {student.name or 'بدون نام'}{role_tag} | {format_jalali_dt(item.created_at)}"
                 f" | وضعیت: {submission_status_label(item.status)}"
                 f" | تأییدکننده: {reviewer_names.get(item.reviewed_by, 'هنوز بررسی نشده')}"
             )
@@ -2481,6 +2482,22 @@ async def send_talati_daily_report(bot, report_date):
             if user.id not in sent_user_ids and user.id not in seen_users:
                 seen_users.add(user.id)
                 missing_names.append(f"• {user.name or 'بدون نام'}" + (f" — {cls.name}" if cls else ""))
+        # Determiners are students too: include every active determiner assigned to
+        # a class covered by this report, even if no Student profile row exists.
+        if report_class_ids:
+            assigners = (await s.execute(
+                select(User, Access.class_id, ClassRoom.name)
+                .join(Access, Access.assigner_user_id == User.id)
+                .join(ClassRoom, ClassRoom.id == Access.class_id, isouter=True)
+                .where(User.role == "ASSIGNER", User.active.is_(True), Access.class_id.in_(report_class_ids))
+                .order_by(User.name)
+            )).all()
+            for user, class_id, class_name in assigners:
+                if user.id not in sent_user_ids and user.id not in seen_users:
+                    seen_users.add(user.id)
+                    missing_names.append(
+                        f"• {user.name or 'بدون نام'} (تعیین‌کننده)" + (f" — {class_name}" if class_name else "")
+                    )
         # Include any submission classes without subject-teacher metadata in the roster
         report_day = datetime.strptime(report_date, "%Y-%m-%d").date()
         jy, jm, jd = gregorian_to_jalali(report_day.year, report_day.month, report_day.day)
