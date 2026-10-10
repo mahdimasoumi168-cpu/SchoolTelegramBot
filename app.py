@@ -398,13 +398,15 @@ ASSIGNER_PERMISSION_FIELDS = {
     "👨‍🎓 دانش‌آموزان": "students_enabled",
     "📚 درس‌ها": "lessons_enabled",
     "📝 تکالیف": "assignments_enabled",
+    "📤 ارسال تکالیف ریاضی": "assignments_enabled",
     "📢 ارسال اطلاعیه": "announcements_enabled",
     "📅 برنامه هفتگی": "schedule_enabled",
     "📝 امتحانات": "exams_enabled",
     "📖 جزوات": "notes_enabled",
     "❓ سؤالات": "questions_enabled",
     "🔔 اطلاعیه فردا": "tomorrow_enabled",
-    "📥 بررسی تکالیف عکس‌ها": "photo_homework_enabled",
+    "📥 تأیید تکالیف استاد سالمی": "photo_homework_enabled",
+    "📥 تأیید تکالیف استاد طلعتی": "photo_homework_enabled",
 }
 ASSIGNER_PERMISSION_LABELS = list(ASSIGNER_PERMISSION_FIELDS.keys())
 
@@ -447,10 +449,11 @@ async def ensure_assigner_permission_settings(session, user_id: int):
 ASSIGNER_MENU = [
     ["👤 پنل تعیین‌کننده", "👨‍🎓 دانش‌آموزان"],
     ["📚 درس‌ها", "📝 تکالیف"],
+    ["📥 تأیید تکالیف استاد سالمی", "📥 تأیید تکالیف استاد طلعتی"],
+    ["📤 ارسال تکالیف ریاضی"],
     ["📢 ارسال اطلاعیه", "📅 برنامه هفتگی"],
     ["📝 امتحانات", "📖 جزوات"],
     ["❓ سؤالات", "🔔 اطلاعیه فردا"],
-    ["📥 بررسی تکالیف عکس‌ها"],
     ["🔄 تغییر حساب"],
     ["🚪 خروج"],
 ]
@@ -1063,21 +1066,36 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             await reply_long(query.message, "فقط تعیین‌کننده فعال می‌تواند تکالیف را بررسی کند.")
             return
         action = parts[1] if len(parts) > 1 else ""
+        if action in ("salemi", "talati"):
+            context.user_data.clear()
+            teacher_name = {"salemi": "استاد سالمی", "talati": "استاد طلعتی"}[action]
+            await send_submission_list(query.message, u, 0, teacher_name)
+            return
         if action == "list":
             context.user_data.clear()
+            teacher_key = None
             page = 0
-            if len(parts) == 3:
-                try:
-                    page = max(0, int(parts[2]))
-                except ValueError:
-                    await reply_long(query.message, "شماره صفحه نامعتبر است.", reply_markup=back_to_panel_markup("ASSIGNER"))
-                    return
-            await send_submission_list(query.message, u, page)
+            try:
+                if len(parts) == 3:
+                    # Backward-compatible pagination links from older messages.
+                    if parts[2] in ("salemi", "talati"):
+                        teacher_key = parts[2]
+                    else:
+                        page = max(0, int(parts[2]))
+                elif len(parts) >= 4:
+                    teacher_key = parts[2] if parts[2] in ("salemi", "talati") else None
+                    page = max(0, int(parts[3]))
+            except ValueError:
+                await reply_long(query.message, "شماره صفحه نامعتبر است.", reply_markup=back_to_panel_markup("ASSIGNER"))
+                return
+            teacher_name = {"salemi": "استاد سالمی", "talati": "استاد طلعتی"}.get(teacher_key)
+            await send_submission_list(query.message, u, page, teacher_name)
             return
         if action == "noop":
             return
-        if action == "view" and len(parts) == 3:
+        if action == "view" and len(parts) in (3, 4):
             context.user_data.clear()
+            teacher_key = parts[3] if len(parts) == 4 and parts[3] in ("salemi", "talati") else None
             try:
                 submission_id = int(parts[2])
             except ValueError:
@@ -1091,7 +1109,8 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                         Access.assigner_user_id == u.id,
                         Access.class_id == item.class_id,
                     ).limit(1))
-                if not item or not allowed:
+                expected_teacher = {"salemi": "استاد سالمی", "talati": "استاد طلعتی"}.get(teacher_key)
+                if not item or not allowed or (expected_teacher and item.teacher_name != expected_teacher):
                     await reply_long(query.message, "این تکلیف پیدا نشد یا به آن دسترسی ندارید.", reply_markup=back_to_panel_markup("ASSIGNER"))
                     return
                 student = await s.get(User, item.student_user_id)
@@ -1114,25 +1133,27 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                     log.exception("failed to show submission photo %s", submission_id)
                     await reply_long(query.message, f"⚠️ نمایش یکی از عکس‌های تکلیف #{submission_id} ناموفق بود.")
             await reply_long(query.message, "نتیجه بررسی را انتخاب کنید:", reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ تأیید تکلیف", callback_data=f"submission:approve:{submission_id}", style="success")],
-                [InlineKeyboardButton("❌ رد تکلیف", callback_data=f"submission:reject:{submission_id}", style="danger")],
-                [InlineKeyboardButton("↩️ بازگشت به فهرست", callback_data="submission:list", style="primary")],
+                [InlineKeyboardButton("✅ تأیید تکلیف", callback_data=f"submission:approve:{submission_id}" + (f":{teacher_key}" if teacher_key else ""), style="success")],
+                [InlineKeyboardButton("❌ رد تکلیف", callback_data=f"submission:reject:{submission_id}" + (f":{teacher_key}" if teacher_key else ""), style="danger")],
+                [InlineKeyboardButton("↩️ بازگشت به فهرست", callback_data=f"submission:list:{teacher_key}:0" if teacher_key else "submission:list", style="primary")],
                 [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
             ]))
             return
-        if action == "approve" and len(parts) == 3:
+        if action == "approve" and len(parts) in (3, 4):
+            teacher_key = parts[3] if len(parts) == 4 and parts[3] in ("salemi", "talati") else None
             try:
                 sid = int(parts[2])
                 await finalize_submission_review(context.bot, u, sid, "APPROVED")
                 await reply_long(query.message, f"✅ تکلیف #{sid} تأیید شد.", reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📥 بررسی تکالیف بعدی", callback_data="submission:list", style="primary")],
+                    [InlineKeyboardButton("📥 بررسی تکالیف بعدی", callback_data=f"submission:list:{teacher_key}:0" if teacher_key else "submission:list", style="primary")],
                     [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
                 ]))
             except Exception as e:
                 log.exception("submission approval failed")
                 await reply_long(query.message, f"❌ {e}", reply_markup=back_to_panel_markup("ASSIGNER"))
             return
-        if action == "reject" and len(parts) == 3:
+        if action == "reject" and len(parts) in (3, 4):
+            teacher_key = parts[3] if len(parts) == 4 and parts[3] in ("salemi", "talati") else None
             try:
                 sid = int(parts[2])
                 async with SessionLocal() as s:
@@ -1148,22 +1169,24 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                 context.user_data.clear()
                 context.user_data["state"] = "submission_reject_reason"
                 context.user_data["submission_reject_id"] = sid
+                context.user_data["submission_teacher_filter"] = teacher_key
                 await reply_long(query.message, f"علت رد تکلیف #{sid} را بنویسید تا برای دانش‌آموز ارسال شود:", reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("رد بدون توضیح", callback_data=f"submission:reject_plain:{sid}", style="danger")],
+                    [InlineKeyboardButton("رد بدون توضیح", callback_data=f"submission:reject_plain:{sid}" + (f":{teacher_key}" if teacher_key else ""), style="danger")],
                     [InlineKeyboardButton("❌ انصراف", callback_data="menu:__CANCEL__", style="danger")],
-                    [InlineKeyboardButton("↩️ بازگشت به فهرست", callback_data="submission:list", style="primary")],
+                    [InlineKeyboardButton("↩️ بازگشت به فهرست", callback_data=f"submission:list:{teacher_key}:0" if teacher_key else "submission:list", style="primary")],
                     [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
                 ]))
             except Exception as e:
                 await reply_long(query.message, f"❌ {e}", reply_markup=back_to_panel_markup("ASSIGNER"))
             return
-        if action == "reject_plain" and len(parts) == 3:
+        if action == "reject_plain" and len(parts) in (3, 4):
+            teacher_key = parts[3] if len(parts) == 4 and parts[3] in ("salemi", "talati") else None
             try:
                 sid = int(parts[2])
                 await finalize_submission_review(context.bot, u, sid, "REJECTED", "نیاز به اصلاح دارد.")
                 context.user_data.clear()
                 await reply_long(query.message, f"❌ تکلیف #{sid} رد شد و نتیجه در سامانه ثبت شد.", reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📥 بررسی تکالیف بعدی", callback_data="submission:list", style="primary")],
+                    [InlineKeyboardButton("📥 بررسی تکالیف بعدی", callback_data=f"submission:list:{teacher_key}:0" if teacher_key else "submission:list", style="primary")],
                     [InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")],
                 ]))
             except Exception as e:
@@ -1774,6 +1797,17 @@ async def show_assigner(update, context, u):
         await reply_panel_text(update.message, "👤 پنل تعیین‌کننده آماده است.", u)
     elif t == "📥 بررسی تکالیف عکس‌ها":
         await send_submission_list(update.message, u)
+    elif t == "📥 تأیید تکالیف استاد سالمی":
+        await send_submission_list(update.message, u, 0, "استاد سالمی")
+    elif t == "📥 تأیید تکالیف استاد طلعتی":
+        await send_submission_list(update.message, u, 0, "استاد طلعتی")
+    elif t == "📤 ارسال تکالیف ریاضی":
+        async with SessionLocal() as s:
+            preview = await panel_inquiry_text(s, u, "📝 تکالیف")
+            if preview:
+                await reply_panel_text(update.message, preview, u)
+        context.user_data["state"] = "assigner_math_assignment"
+        await reply_long(update.message, "📤 ارسال تکالیف ریاضی\n\nاز دکمه‌های «افزودن»، «ویرایش» یا «حذف» استفاده کنید. این بخش فقط درس‌هایی را می‌پذیرد که نام درس یا استاد آن‌ها شامل «ریاضی» باشد. با افزودن تکلیف، اطلاع‌رسانی برای کلاس مجاز ارسال می‌شود.")
     elif t == "👨‍🎓 دانش‌آموزان":
         async with SessionLocal() as s:
             access = (await s.execute(select(Access).where(Access.assigner_user_id == u.id))).scalars().all()
@@ -2441,8 +2475,8 @@ async def send_admin_notification_list(message, page: int = 0):
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
-async def send_submission_list(message, assigner, page: int = 0):
-    """Paginated queue of pending photo homework for the determiner."""
+async def send_submission_list(message, assigner, page: int = 0, teacher_name: str | None = None):
+    """Paginated pending photo-homework queue, optionally limited to one teacher."""
     page_size = 25
     page = max(0, int(page))
     async with SessionLocal() as s:
@@ -2452,11 +2486,14 @@ async def send_submission_list(message, assigner, page: int = 0):
         total = 0
         rows = []
         if class_ids:
+            count_conditions = [
+                HomeworkSubmission.status == "PENDING",
+                HomeworkSubmission.class_id.in_(class_ids),
+            ]
+            if teacher_name:
+                count_conditions.append(HomeworkSubmission.teacher_name == teacher_name)
             total = await s.scalar(
-                select(func.count(HomeworkSubmission.id)).where(
-                    HomeworkSubmission.status == "PENDING",
-                    HomeworkSubmission.class_id.in_(class_ids),
-                )
+                select(func.count(HomeworkSubmission.id)).where(*count_conditions)
             )
             max_page = max(0, (int(total or 0) - 1) // page_size)
             page = min(page, max_page)
@@ -2467,6 +2504,7 @@ async def send_submission_list(message, assigner, page: int = 0):
                 .where(
                     HomeworkSubmission.status == "PENDING",
                     HomeworkSubmission.class_id.in_(class_ids),
+                    *([HomeworkSubmission.teacher_name == teacher_name] if teacher_name else []),
                 )
                 .order_by(HomeworkSubmission.created_at.desc())
                 .offset(page * page_size)
@@ -2478,21 +2516,23 @@ async def send_submission_list(message, assigner, page: int = 0):
     buttons = [
         [InlineKeyboardButton(
             f"📝 #{sub.id} — {user.name or 'دانش‌آموز'} — {sub.teacher_name or 'استاد نامشخص'}",
-            callback_data=f"submission:view:{sub.id}",
+            callback_data=f"submission:view:{sub.id}" + (f":{'salemi' if teacher_name == 'استاد سالمی' else 'talati'}" if teacher_name else ""),
             style="primary",
         )]
         for sub, user, student in rows
     ]
     if total:
         nav = []
+        filter_key = "salemi" if teacher_name == "استاد سالمی" else "talati" if teacher_name == "استاد طلعتی" else None
         if page > 0:
-            nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"submission:list:{page-1}", style="primary"))
+            nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"submission:list:{filter_key}:{page-1}" if filter_key else f"submission:list:{page-1}", style="primary"))
         nav.append(InlineKeyboardButton(f"صفحه {page+1} از {max_page+1}", callback_data="submission:noop"))
         if page < max_page:
-            nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"submission:list:{page+1}", style="primary"))
+            nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"submission:list:{filter_key}:{page+1}" if filter_key else f"submission:list:{page+1}", style="primary"))
         buttons.append(nav)
+    filter_key = "salemi" if teacher_name == "استاد سالمی" else "talati" if teacher_name == "استاد طلعتی" else None
     buttons.append([InlineKeyboardButton("👤 پنل تعیین‌کننده", callback_data="menu:__BACK_PANEL__", style="primary")])
-    body = "📥 تکالیف عکس‌های در انتظار بررسی\n\nبرای دیدن تصاویر و مشخصات، یک مورد را انتخاب کنید."
+    body = (f"📥 تکالیف تصویری در انتظار بررسی — {teacher_name}\n\nبرای دیدن تصاویر و مشخصات، یک مورد را انتخاب کنید." if teacher_name else "📥 تکالیف عکس‌های در انتظار بررسی\n\nبرای دیدن تصاویر و مشخصات، یک مورد را انتخاب کنید.")
     if not rows:
         body = "✅ در حال حاضر تکلیف تصویریِ در انتظار بررسی برای کلاس‌های شما وجود ندارد."
     await reply_long(message, body, reply_markup=InlineKeyboardMarkup(buttons))
@@ -3651,6 +3691,11 @@ async def process_state(update, context, u):
             "ویرایش": [("id","شناسه تکلیف را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("body","متن جدید را ارسال کنید:"),("due","مهلت جدید را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ یا «ندارد» ارسال کنید:")],
             "حذف": [("id","شناسه تکلیف را ارسال کنید:")]
         },
+        "assigner_math_assignment": {
+            "افزودن": [("subject","نام درس ریاضی را ارسال کنید:"),("title","عنوان تکلیف را ارسال کنید:"),("body","متن تکلیف را ارسال کنید:"),("due","مهلت را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ ارسال کنید؛ اگر ندارد «ندارد»:")],
+            "ویرایش": [("id","شناسه تکلیف ریاضی را ارسال کنید:"),("subject","نام درس ریاضی جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("body","متن جدید را ارسال کنید:"),("due","مهلت جدید را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ یا «ندارد» ارسال کنید:")],
+            "حذف": [("id","شناسه تکلیف ریاضی را ارسال کنید:")]
+        },
         "assigner_exam": {
             "افزودن": [("subject","نام درس را ارسال کنید:"),("title","عنوان امتحان را ارسال کنید:"),("at","تاریخ و ساعت را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ ارسال کنید:"),("details","توضیحات را ارسال کنید؛ اگر ندارد «ندارد»:")],
             "ویرایش": [("id","شناسه امتحان را ارسال کنید:"),("subject","نام درس جدید را ارسال کنید:"),("title","عنوان جدید را ارسال کنید:"),("at","تاریخ و ساعت جدید را با تاریخ شمسی مثل ۱۴۰۵/۰۷/۰۹ ۱۸:۳۰ ارسال کنید:"),("details","توضیحات جدید را ارسال کنید؛ اگر ندارد «ندارد»:")],
@@ -3694,7 +3739,7 @@ async def process_state(update, context, u):
         action = flow["action"]
         vals = flow["values"]
         context.user_data.pop("assigner_flow", None)
-        if state in ("assigner_assignment","assigner_exam","assigner_schedule"):
+        if state in ("assigner_assignment","assigner_math_assignment","assigner_exam","assigner_schedule"):
             text = action + "|" + "|".join(vals)
         elif state in ("assigner_announcement","assigner_tomorrow","assigner_answer"):
             text = "|".join(vals)
@@ -3732,7 +3777,11 @@ async def process_state(update, context, u):
         try:
             async with SessionLocal() as s:
                 subs = await allowed_subjects(s, u)
-                if state == "assigner_assignment":
+                if state == "assigner_math_assignment":
+                    subs = [x for x in subs if "ریاضی" in (x.name or "") or "ریاضی" in (x.teacher_name or "")]
+                    if not subs:
+                        raise ValueError("هیچ درس ریاضی در دسترسی شما پیدا نشد. از مدیریت بخواهید درس ریاضی و دسترسی کلاسی شما را بررسی کند.")
+                if state in ("assigner_assignment", "assigner_math_assignment"):
                     p=[x.strip() for x in text.split("|")]
                     allowed_ids={x.id for x in subs}
                     if p[0]=="افزودن" and len(p)>=5:
