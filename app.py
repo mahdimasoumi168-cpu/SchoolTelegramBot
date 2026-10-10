@@ -1079,11 +1079,12 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         u = await db_user(query.from_user.id)
         if action == "refresh":
             teacher_id = await get_system_setting("talati_teacher_telegram_id")
-            if teacher_id and str(query.from_user.id) != teacher_id and (not u or u.role not in ("ADMIN", "ASSIGNER")):
-                await reply_long(query.message, "برای مشاهده این گزارش دسترسی ندارید.")
+            is_recipient = bool(teacher_id and str(query.from_user.id) == teacher_id)
+            if not is_recipient and (not u or not u.active or u.role not in ("ADMIN", "ASSIGNER")):
+                await reply_long(query.message, "برای به‌روزرسانی این گزارش دسترسی ندارید.")
                 return
-            await run_daily_maintenance(context)
-            await reply_long(query.message, "درخواست به‌روزرسانی گزارش ثبت شد. گزارش طبق زمان‌بندی روزانه ارسال می‌شود.")
+            sent = await send_talati_daily_report(context.bot, datetime.now(TZ).date().isoformat())
+            await reply_long(query.message, "✅ گزارش تازه به شناسه تنظیم‌شده استاد طلعتی ارسال شد." if sent else "❌ گزارش ارسال نشد. شناسه معلم را در مدیریت بررسی کنید و دوباره تلاش کنید.")
             return
         if action == "view" and len(parts) == 3:
             try:
@@ -1165,6 +1166,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                 status_text = submission_status_label(status)
                 student = await s.get(User, item.student_user_id)
                 student_tg = await get_notification_telegram_id(s, student.id, student.telegram_id) if student else None
+            await log_action(u.id, "talati_homework_status", f"{submission_id}|{status}")
             if student_tg:
                 try:
                     await send_long(context.bot, student_tg, f"📋 نتیجه بررسی تکلیف ریاضی استاد طلعتی: {status_text}", reply_markup=back_to_panel_markup("STUDENT"))
@@ -1604,6 +1606,9 @@ async def show_student(update, u, context=None):
         await send_student_entry_digest(context.bot, u)
         await reply_panel_text(update.message, "👨‍🎓 پنل دانش‌آموز آماده است. از گزینه‌های زیر استفاده کنید.", u)
     elif t == "📸 ارسال تکالیف ریاضی":
+        if not submission_window_open():
+            await reply_long(update.message, "⏰ مهلت ارسال تکلیف تا ساعت ۹ شب است. ارسال امروز بسته شده است.", reply_markup=await student_menu_markup(u.id))
+            return
         context.user_data["state"] = "student_math_choose_teacher"
         context.user_data.pop("math_teacher_name", None)
         context.user_data["math_submission_photos"] = []
