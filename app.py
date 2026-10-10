@@ -203,6 +203,8 @@ class Assignment(Base):
     body: Mapped[str] = mapped_column(Text, default="")
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    # New assignments are temporary by default; legacy rows are preserved by migration.
+    is_temporary: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("FALSE"), nullable=False)
 
 
 class Exam(Base):
@@ -213,6 +215,8 @@ class Exam(Base):
     exam_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     details: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    # New exams are temporary by default; legacy rows are preserved by migration.
+    is_temporary: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("FALSE"), nullable=False)
 
 
 class Schedule(Base):
@@ -2355,6 +2359,22 @@ def submission_window_open(now=None) -> bool:
     return local_now.hour < 21
 
 
+def talati_report_target_date(now=None):
+    """Return the report date during the nightly send/retry window, or None."""
+    local_now = (now or datetime.now(TZ)).astimezone(TZ)
+    if local_now.hour >= 22:
+        return local_now.date().isoformat()
+    if local_now.hour < 3:
+        return (local_now.date() - timedelta(days=1)).isoformat()
+    return None
+
+
+def temporary_cleanup_window_open(now=None) -> bool:
+    """Allow cleanup at 03:00 and catch-up after a brief restart, but not later."""
+    local_now = (now or datetime.now(TZ)).astimezone(TZ)
+    return 3 <= local_now.hour < 6
+
+
 def submission_status_label(status: str) -> str:
     return {
         "PENDING": "در انتظار بررسی",
@@ -2532,10 +2552,12 @@ async def cleanup_temporary_school_data():
         if announcement_ids:
             await s.execute(delete(Delivery).where(Delivery.announcement_id.in_(announcement_ids)))
             await s.execute(delete(Announcement).where(Announcement.id.in_(announcement_ids)))
-        assignment_count = await s.scalar(select(func.count(Assignment.id)))
-        exam_count = await s.scalar(select(func.count(Exam.id)))
-        await s.execute(delete(Assignment))
-        await s.execute(delete(Exam))
+        # Delete only records explicitly marked temporary. Existing records are
+        # migrated as permanent to avoid accidentally erasing important legacy data.
+        assignment_count = await s.scalar(select(func.count(Assignment.id)).where(Assignment.is_temporary.is_(True)))
+        exam_count = await s.scalar(select(func.count(Exam.id)).where(Exam.is_temporary.is_(True)))
+        await s.execute(delete(Assignment).where(Assignment.is_temporary.is_(True)))
+        await s.execute(delete(Exam).where(Exam.is_temporary.is_(True)))
         await s.commit()
     await log_action(
         None,
@@ -2552,20 +2574,22 @@ async def cleanup_temporary_school_data():
 async def run_daily_maintenance(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(TZ)
     today = now.date().isoformat()
-    # Once daily, during the 03:00 hour; a stored date prevents duplicate work.
-    if now.hour == 3:
+    # Run at 03:00, and catch up through 05:59 if a brief restart missed 03:00.
+    # Never run later in the day, when newly created content must be retained.
+    if temporary_cleanup_window_open(now):
         last_cleanup = await get_system_setting("last_temporary_cleanup_date")
         if last_cleanup != today:
             await cleanup_temporary_school_data()
             await set_system_setting("last_temporary_cleanup_date", today)
 
-    # Retry the report through the night if the teacher ID has not yet been set
-    # or Telegram was temporarily unavailable. Never send twice for the same date.
-    if now.hour >= 22 or now.hour < 3:
+    # At 22:00 report today's work. After midnight, retry yesterday's report,
+    # rather than incorrectly sending an empty report for the new date.
+    report_date = talati_report_target_date(now)
+    if report_date:
         last_report = await get_system_setting("last_talati_report_date")
-        if last_report != today:
-            if await send_talati_daily_report(context.bot, today):
-                await set_system_setting("last_talati_report_date", today)
+        if last_report != report_date:
+            if await send_talati_daily_report(context.bot, report_date):
+                await set_system_setting("last_talati_report_date", report_date)
 
 
 async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
