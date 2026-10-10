@@ -2533,7 +2533,7 @@ async def run_daily_maintenance(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(TZ)
     today = now.date().isoformat()
     # Once daily, during the 03:00 hour; a stored date prevents duplicate work.
-    if 3 <= now.hour < 5:
+    if now.hour == 3:
         last_cleanup = await get_system_setting("last_temporary_cleanup_date")
         if last_cleanup != today:
             await cleanup_temporary_school_data()
