@@ -2482,9 +2482,12 @@ async def send_talati_daily_report(bot, report_date):
                 seen_users.add(user.id)
                 missing_names.append(f"• {user.name or 'بدون نام'}" + (f" — {cls.name}" if cls else ""))
         # Include any submission classes without subject-teacher metadata in the roster
+        report_day = datetime.strptime(report_date, "%Y-%m-%d").date()
+        jy, jm, jd = gregorian_to_jalali(report_day.year, report_day.month, report_day.day)
+        report_date_jalali = f"{jy:04d}/{jm:02d}/{jd:02d}"
         body = (
             f"📊 گزارش روزانه تکالیف ریاضی — استاد طلعتی\n"
-            f"📅 تاریخ: {report_date}\n"
+            f"📅 تاریخ: {report_date_jalali}\n"
             f"📥 تعداد ارسال‌ها: {len(day_submissions)}\n"
             f"⏳ ارسال‌نکرده‌ها: {len(missing_names)}\n\n"
             f"✅ دانش‌آموزانی که تکلیف فرستاده‌اند:\n"
