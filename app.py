@@ -522,9 +522,12 @@ def norm_name(value: str) -> str:
 
 
 def norm_username(value: str) -> str:
-    """Normalize assigner usernames for reliable login/edit operations."""
-    value = (value or "").replace("\u200c", "").replace("ي", "ی").replace("ك", "ک")
-    return value.strip().casefold()
+    """Normalize usernames consistently across Persian/Arabic keyboard variants."""
+    import unicodedata
+    value = unicodedata.normalize("NFKC", value or "")
+    value = value.replace("\u200c", "").replace("\u200d", "")
+    value = value.replace("ي", "ی").replace("ى", "ی").replace("ك", "ک")
+    return " ".join(value.strip().casefold().split())
 
 
 def hash_password(password: str, salt: str | None = None) -> str:
@@ -2856,32 +2859,54 @@ async def process_state(update, context, u):
         return True
 
     if state == "auth_assigner_password":
-        username = context.user_data.get("login_username", "").strip()
-        password = text
+        username = context.user_data.get("login_username", "")
+        # Preserve the password exactly as sent; leading/trailing spaces can be intentional.
+        password = update.message.text or ""
         if not password:
             await reply_long(update.message, "❌ رمز عبور نمی‌تواند خالی باشد. دوباره ارسال کنید:")
             return True
+        username_key = norm_username(username)
         async with SessionLocal() as s:
-            assigners = (await s.execute(
-                select(User).where(User.role == "ASSIGNER", User.active.is_(True))
+            all_assigners = (await s.execute(
+                select(User).where(User.role == "ASSIGNER")
             )).scalars().all()
-            username_key = norm_username(username)
-            account = next((item for item in assigners if norm_username(item.login_username) == username_key), None)
+            matches = [item for item in all_assigners if norm_username(item.login_username) == username_key]
+            if len(matches) > 1:
+                log.error("assigner login blocked: duplicate normalized usernames")
+                await reply_long(update.message, "❌ نام کاربری تکراری است و ورود امن نیست. از مدیریت بخواهید نام کاربری تعیین‌کننده را اصلاح کند.")
+                return True
+            account = matches[0] if matches else None
+            if account is not None and not account.active:
+                await reply_long(update.message, "⛔ این حساب تعیین‌کننده غیرفعال است. از مدیریت بخواهید آن را فعال کند.")
+                return True
             valid_password = bool(account and account.password_hash and verify_password(password, account.password_hash))
             if not valid_password and account and account.password_hash:
-                valid_password = secrets.compare_digest(account.password_hash, password)
+                # Migrate legacy plaintext credentials once, after a successful comparison.
+                try:
+                    valid_password = secrets.compare_digest(account.password_hash, password)
+                except TypeError:
+                    valid_password = False
                 if valid_password:
                     account.password_hash = hash_password(password)
             if not account or not valid_password:
-                await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است. دوباره /start را بزنید.")
-                context.user_data.clear()
+                log.warning("assigner login rejected: username_match=%s", account is not None)
+                await reply_long(
+                    update.message,
+                    "❌ ورود انجام نشد. نام کاربری یا رمز عبور با اطلاعات ثبت‌شده مطابقت ندارد.\n"
+                    "نام کاربری را دوباره بررسی کنید؛ برای امتحان مجدد همین‌جا رمز را وارد کنید. "
+                    "برای شروع از ابتدا «شروع مجدد» را بزنید.",
+                    reply_markup=auth_choice_markup(),
+                )
+                # Keep the login state so the user can retry without losing the entered username.
+                context.user_data["state"] = "auth_assigner_password"
+                context.user_data["login_username"] = username
                 return True
-            
+
+            account.login_username = username_key
             account = await bind_telegram_account(s, account, update.effective_user.id)
-            account.active = True
             await s.commit()
         context.user_data.clear()
-        await log_action(account.id, "assigner_login", username)
+        await log_action(account.id, "assigner_login", username_key)
         await panel(update, f"سلام {account.name} 👋\nورود با موفقیت انجام شد.")
         await send_assigner_entry_alert(context.bot, account, update.effective_chat.id)
         return True
@@ -2947,28 +2972,35 @@ async def process_state(update, context, u):
             await reply_long(update.message, "ابتدا نام کاربری را ارسال کنید:")
             return True
     if state == "auth_assigner_password" and "login_username" in context.user_data:
-        username = context.user_data.get("login_username", "").strip()
-        password = text
+        # Backward-compatible login path; use the same normalized account lookup.
+        username = context.user_data.get("login_username", "")
+        password = update.message.text or ""
+        username_key = norm_username(username)
         async with SessionLocal() as s:
-            assigners = (await s.execute(
-                select(User).where(User.role == "ASSIGNER", User.active.is_(True))
+            all_assigners = (await s.execute(
+                select(User).where(User.role == "ASSIGNER")
             )).scalars().all()
-            username_key = norm_username(username)
-            account = next((item for item in assigners if norm_username(item.login_username) == username_key), None)
-            valid_password = bool(account and account.password_hash and verify_password(password, account.password_hash))
-            if not valid_password and account and account.password_hash:
-                valid_password = secrets.compare_digest(account.password_hash, password)
+            matches = [item for item in all_assigners if norm_username(item.login_username) == username_key]
+            account = matches[0] if len(matches) == 1 else None
+            valid_password = bool(account and account.active and account.password_hash and verify_password(password, account.password_hash))
+            if not valid_password and account and account.active and account.password_hash:
+                try:
+                    valid_password = secrets.compare_digest(account.password_hash, password)
+                except TypeError:
+                    valid_password = False
                 if valid_password:
                     account.password_hash = hash_password(password)
-            if not account or not valid_password:
-                await reply_long(update.message, "❌ نام کاربری یا رمز عبور نادرست است.")
+            if not account or not account.active or not valid_password:
+                await reply_long(update.message, "❌ ورود انجام نشد. نام کاربری یا رمز عبور با اطلاعات ثبت‌شده مطابقت ندارد؛ دوباره تلاش کنید یا «شروع مجدد» را بزنید.", reply_markup=auth_choice_markup())
+                context.user_data["state"] = "auth_assigner_password"
+                context.user_data["login_username"] = username
                 return True
-            
-            account.login_username = norm_username(account.login_username)
+
+            account.login_username = username_key
             account = await bind_telegram_account(s, account, update.effective_user.id)
             await s.commit()
         context.user_data.clear()
-        await log_action(account.id, "assigner_login", account.login_username or username)
+        await log_action(account.id, "assigner_login", account.login_username or username_key)
         await panel(update, f"سلام {account.name} 👋\nورود با موفقیت انجام شد.")
         await send_assigner_entry_alert(context.bot, account, update.effective_chat.id)
         return True
