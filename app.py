@@ -476,6 +476,10 @@ ADMIN_MENU = [
 
 ROLE_NAMES = {"STUDENT": "دانش‌آموز", "ASSIGNER": "تعیین‌کننده", "ADMIN": "مدیریت", "PENDING": "در انتظار تأیید"}
 
+def menu_label_code(label: str) -> str:
+    return hashlib.sha256((label or "").encode("utf-8")).hexdigest()[:12]
+
+
 MENU_CALLBACK_LABELS = {
     menu_label_code(label): label
     for row in (STUDENT_MENU + ASSIGNER_MENU + ADMIN_MENU)
@@ -552,10 +556,6 @@ def button_style(label: str):
 def styled_button(label, callback_data):
     style = button_style(label)
     return InlineKeyboardButton(label, callback_data=callback_data, **({"style": style} if style else {}))
-
-
-def menu_label_code(label: str) -> str:
-    return hashlib.sha256((label or "").encode("utf-8")).hexdigest()[:12]
 
 
 def keyboard(rows):
