@@ -294,6 +294,12 @@ class HomeworkSubmission(Base):
     student_notified: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+
+
 class StudentNotificationSettings(Base):
     __tablename__ = "student_notification_settings"
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
@@ -450,7 +456,7 @@ ASSIGNER_MENU = [
     ["👤 پنل تعیین‌کننده", "👨‍🎓 دانش‌آموزان"],
     ["📚 درس‌ها", "📝 تکالیف"],
     ["📥 تأیید تکالیف استاد سالمی", "📥 تأیید تکالیف استاد طلعتی"],
-    ["📤 ارسال تکالیف ریاضی"],
+    ["📤 ارسال تکالیف ریاضی", "📸 ارسال تکالیف ریاضی"],
     ["📢 ارسال اطلاعیه", "📅 برنامه هفتگی"],
     ["📝 امتحانات", "📖 جزوات"],
     ["❓ سؤالات", "🔔 اطلاعیه فردا"],
@@ -474,6 +480,7 @@ ADMIN_MENU = [
     ["🔔 تنظیم اعلان‌های دانش‌آموزان"],
     ["🎛️ تنظیم دکمه‌های دانش‌آموزان"],
     ["🎛️ تنظیم دکمه‌های تعیین‌کنندگان"],
+    ["🎓 شناسه تلگرام استاد طلعتی"],
     ["🔄 تغییر حساب"],
     ["🚪 خروج"],
 ]
@@ -1005,10 +1012,14 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
     if data.startswith("mathsub:"):
         action = data.split(":", 1)[1]
         u = await db_user(query.from_user.id)
-        if not u or not u.active or u.role != "STUDENT":
-            await reply_long(query.message, "برای این عملیات باید با حساب دانش‌آموز وارد شوید.")
+        if not u or not u.active or u.role not in ("STUDENT", "ASSIGNER"):
+            await reply_long(query.message, "برای این عملیات باید با حساب دانش‌آموز یا تعیین‌کننده وارد شوید.")
             return
         if action.startswith("teacher:"):
+            if not submission_window_open():
+                await reply_long(query.message, "⏰ مهلت ارسال تکلیف تا ساعت ۹ شب است. ارسال جدید برای امروز بسته شده است.", reply_markup=back_to_panel_markup(u.role))
+                context.user_data.clear()
+                return
             teacher_key = action.split(":", 1)[1]
             teachers = {"salemi": "استاد سالمی", "talati": "استاد طلعتی"}
             teacher_name = teachers.get(teacher_key)
@@ -1038,16 +1049,19 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                     [InlineKeyboardButton("❌ انصراف", callback_data="menu:__CANCEL__", style="danger")],
                 ]))
                 return
+            if not submission_window_open():
+                await reply_long(query.message, "⏰ مهلت ارسال تکلیف تا ساعت ۹ شب است. این ارسال ثبت نشد.", reply_markup=back_to_panel_markup(u.role))
+                context.user_data.clear()
+                return
             if not photos:
                 await reply_long(query.message, "هنوز عکسی دریافت نشده است. ابتدا عکس تکلیف را ارسال کنید.", reply_markup=navigation_markup())
                 return
             async with SessionLocal() as s:
-                student = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
-                if not student or not student.class_id:
-                    await reply_long(query.message, "کلاس شما مشخص نیست؛ با مدیریت مدرسه تماس بگیرید.", reply_markup=back_to_panel_markup("STUDENT"))
+                class_id = await get_math_submission_class_id(s, u)
+                if not class_id:
+                    await reply_long(query.message, "کلاس شما مشخص نیست؛ از مدیریت بخواهید حساب دانش‌آموزی/کلاس شما را بررسی کند.", reply_markup=back_to_panel_markup(u.role))
                     context.user_data.clear()
                     return
-                class_id = student.class_id
                 item = HomeworkSubmission(student_user_id=u.id, class_id=class_id, photos=json.dumps(photos, ensure_ascii=False), teacher_name=teacher_name, status="PENDING")
                 s.add(item)
                 await s.commit()
@@ -1055,7 +1069,108 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                 submission_id = item.id
             context.user_data.clear()
             await notify_assigners_submission(context.bot, submission_id, class_id, u.name or "دانش‌آموز", teacher_name)
-            await reply_long(query.message, f"✅ تکلیف تصویری شما با موفقیت ثبت شد.\nشماره پیگیری: #{submission_id}\nپس از بررسی، نتیجه برایتان ارسال می‌شود.", reply_markup=back_to_panel_markup("STUDENT"))
+            await reply_long(query.message, f"✅ تکلیف تصویری شما با موفقیت ثبت شد.\nشماره پیگیری: #{submission_id}\nپس از بررسی، نتیجه برایتان ارسال می‌شود.", reply_markup=back_to_panel_markup(u.role))
+            return
+        return
+
+    if data.startswith("report:"):
+        parts = data.split(":")
+        action = parts[1] if len(parts) > 1 else ""
+        u = await db_user(query.from_user.id)
+        if action == "refresh":
+            teacher_id = await get_system_setting("talati_teacher_telegram_id")
+            if teacher_id and str(query.from_user.id) != teacher_id and (not u or u.role not in ("ADMIN", "ASSIGNER")):
+                await reply_long(query.message, "برای مشاهده این گزارش دسترسی ندارید.")
+                return
+            await run_daily_maintenance(context)
+            await reply_long(query.message, "درخواست به‌روزرسانی گزارش ثبت شد. گزارش طبق زمان‌بندی روزانه ارسال می‌شود.")
+            return
+        if action == "view" and len(parts) == 3:
+            try:
+                submission_id = int(parts[2])
+            except ValueError:
+                await reply_long(query.message, "شناسه تکلیف نامعتبر است.")
+                return
+            teacher_id = await get_system_setting("talati_teacher_telegram_id")
+            is_report_recipient = bool(teacher_id and str(query.from_user.id) == teacher_id)
+            if not is_report_recipient and (not u or not u.active or u.role not in ("ADMIN", "ASSIGNER")):
+                await reply_long(query.message, "برای مشاهده این گزارش دسترسی ندارید.")
+                return
+            async with SessionLocal() as s:
+                item = await s.get(HomeworkSubmission, submission_id)
+                if not item or item.teacher_name != "استاد طلعتی":
+                    await reply_long(query.message, "تکلیف استاد طلعتی پیدا نشد.")
+                    return
+                if u and u.role == "ASSIGNER":
+                    allowed = await s.scalar(select(Access.id).where(
+                        Access.assigner_user_id == u.id, Access.class_id == item.class_id
+                    ).limit(1))
+                    if not allowed:
+                        await reply_long(query.message, "به این کلاس دسترسی ندارید.")
+                        return
+                student = await s.get(User, item.student_user_id)
+                cls = await s.get(ClassRoom, item.class_id)
+                reviewer = await s.get(User, item.reviewed_by) if item.reviewed_by else None
+                photos = json.loads(item.photos or "[]")
+                details = (
+                    f"📥 تکلیف ریاضی استاد طلعتی #{item.id}\n"
+                    f"👤 دانش‌آموز: {student.name if student else 'نامشخص'}\n"
+                    f"🏫 کلاس: {cls.name if cls else 'نامشخص'}\n"
+                    f"📅 تاریخ و ساعت ارسال: {format_jalali_dt(item.created_at)}\n"
+                    f"📋 وضعیت: {submission_status_label(item.status)}\n"
+                    f"👤 تأییدکننده: {reviewer.name if reviewer else 'هنوز تعیین نشده'}"
+                )
+            for index, photo_id in enumerate(photos):
+                await query.message.reply_photo(photo=photo_id, caption=details if index == 0 else f"تصویر {index + 1} از {len(photos)}")
+            if u and u.active and u.role in ("ADMIN", "ASSIGNER"):
+                buttons = [
+                    [InlineKeyboardButton("✅ تکلیف کامل", callback_data=f"report:status:{submission_id}:COMPLETE", style="success")],
+                    [InlineKeyboardButton("🟡 تکلیف ناقص", callback_data=f"report:status:{submission_id}:INCOMPLETE", style="primary")],
+                    [InlineKeyboardButton("❌ تکلیف نادرست", callback_data=f"report:status:{submission_id}:INCORRECT", style="danger")],
+                ]
+                await reply_long(query.message, "وضعیت تکلیف را تعیین کنید:", reply_markup=InlineKeyboardMarkup(buttons))
+            else:
+                await reply_long(query.message, "این گزارش فقط برای مشاهده است؛ تعیین وضعیت بر عهده تعیین‌کننده است.")
+            return
+        if action == "status" and len(parts) == 4:
+            if not u or not u.active or u.role not in ("ADMIN", "ASSIGNER"):
+                await reply_long(query.message, "فقط تعیین‌کننده مجاز می‌تواند وضعیت تکلیف را ثبت کند.")
+                return
+            try:
+                submission_id = int(parts[2])
+            except ValueError:
+                await reply_long(query.message, "شناسه تکلیف نامعتبر است.")
+                return
+            status = parts[3]
+            if status not in ("COMPLETE", "INCOMPLETE", "INCORRECT"):
+                await reply_long(query.message, "وضعیت تکلیف نامعتبر است.")
+                return
+            async with SessionLocal() as s:
+                item = await s.get(HomeworkSubmission, submission_id)
+                if not item or item.teacher_name != "استاد طلعتی":
+                    await reply_long(query.message, "تکلیف استاد طلعتی پیدا نشد.")
+                    return
+                if u.role == "ASSIGNER":
+                    allowed = await s.scalar(select(Access.id).where(
+                        Access.assigner_user_id == u.id, Access.class_id == item.class_id
+                    ).limit(1))
+                    if not allowed:
+                        await reply_long(query.message, "به این کلاس دسترسی ندارید.")
+                        return
+                item.status = status
+                item.reviewed_by = u.id
+                item.reviewed_at = datetime.now(timezone.utc)
+                item.review_note = ""
+                await s.commit()
+                status_text = submission_status_label(status)
+                student = await s.get(User, item.student_user_id)
+                student_tg = await get_notification_telegram_id(s, student.id, student.telegram_id) if student else None
+            if student_tg:
+                try:
+                    await send_long(context.bot, student_tg, f"📋 نتیجه بررسی تکلیف ریاضی استاد طلعتی: {status_text}", reply_markup=back_to_panel_markup("STUDENT"))
+                except Exception:
+                    log.exception("Talati homework status notification failed")
+            await reply_long(query.message, f"✅ وضعیت تکلیف #{submission_id} ثبت شد: {status_text}")
             return
         return
 
@@ -1795,6 +1910,18 @@ async def show_assigner(update, context, u):
     if t == "👤 پنل تعیین‌کننده":
         await send_assigner_entry_alert(context.bot, u, update.effective_chat.id)
         await reply_panel_text(update.message, "👤 پنل تعیین‌کننده آماده است.", u)
+    elif t == "📸 ارسال تکالیف ریاضی":
+        if not submission_window_open():
+            await reply_long(update.message, "⏰ مهلت ارسال تکلیف تا ساعت ۹ شب است.", reply_markup=keyboard(assigner_menu_rows(await get_assigner_enabled_fields(u.id))))
+            return
+        context.user_data["state"] = "student_math_choose_teacher"
+        context.user_data.pop("math_teacher_name", None)
+        context.user_data["math_submission_photos"] = []
+        await reply_long(update.message, "📸 ارسال تکالیف ریاضی توسط تعیین‌کننده\n\nشما هم مانند دانش‌آموزان می‌توانید تکلیف خود را بفرستید. این ارسال با نام شما در آمار استاد انتخاب‌شده ثبت می‌شود. تکلیف برای کدام استاد است؟", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("👨‍🏫 استاد سالمی", callback_data="mathsub:teacher:salemi", style="primary")],
+            [InlineKeyboardButton("👨‍🏫 استاد طلعتی", callback_data="mathsub:teacher:talati", style="primary")],
+            [InlineKeyboardButton("❌ انصراف", callback_data="menu:__CANCEL__", style="danger")],
+        ]))
     elif t == "📥 بررسی تکالیف عکس‌ها":
         await send_submission_list(update.message, u)
     elif t == "📥 تأیید تکالیف استاد سالمی":
@@ -2007,6 +2134,10 @@ async def show_admin(update, context, u):
                 await reply_long(update.message, preview)
         context.user_data["state"] = "admin_files"
         await reply_long(update.message, "🗂️ مدیریت فایل‌ها\n\nبرای فهرست، دکمه «نمایش» و برای حذف، دکمه «حذف» را انتخاب کنید؛ شناسه فایل را در پیام بعدی می‌گیرم.")
+    elif t == "🎓 شناسه تلگرام استاد طلعتی":
+        current_teacher_id = await get_system_setting("talati_teacher_telegram_id")
+        context.user_data["state"] = "admin_talati_report_id"
+        await reply_long(update.message, "🎓 تنظیم شناسه تلگرام استاد طلعتی\n\nشناسه عددی تلگرام معلم را بفرستید (مثال: 123456789). گزارش روزانه تکالیف فقط برای استاد طلعتی ساعت ۱۰ شب به این شناسه ارسال می‌شود. برای پاک‌کردن شناسه فعلی، «حذف» را بفرستید.\n\nشناسه فعلی: " + (current_teacher_id or "تنظیم نشده"))
     elif t == "⚙️ تنظیمات بات":
         await reply_panel_text(update.message, f"⚙️ تنظیمات فعال\nمنطقه زمانی: {TIMEZONE}\nپایگاه‌داده: {'PostgreSQL' if 'postgres' in DATABASE_URL else 'سایر'}", u)
     elif t == "🗄️ مدیریت دیتابیس":
@@ -2181,6 +2312,72 @@ async def notify_class(bot, class_id: int | None, text: str, announcement_id: in
         await s.commit()
 
 
+async def get_system_setting(key: str, default: str = "") -> str:
+    async with SessionLocal() as s:
+        setting = await s.get(SystemSetting, key)
+        return (setting.value if setting and setting.value is not None else default).strip()
+
+
+async def set_system_setting(key: str, value: str):
+    async with SessionLocal() as s:
+        setting = await s.get(SystemSetting, key)
+        if setting is None:
+            setting = SystemSetting(key=key, value=value)
+            s.add(setting)
+        else:
+            setting.value = value
+        await s.commit()
+
+
+def jalali_today(now=None):
+    local_now = (now or datetime.now(TZ)).astimezone(TZ)
+    jy, jm, jd = gregorian_to_jalali(local_now.year, local_now.month, local_now.day)
+    return f"{jy:04d}/{jm:02d}/{jd:02d}"
+
+
+def submission_window_open(now=None) -> bool:
+    local_now = (now or datetime.now(TZ)).astimezone(TZ)
+    return local_now.hour < 21
+
+
+def submission_status_label(status: str) -> str:
+    return {
+        "PENDING": "در انتظار بررسی",
+        "APPROVED": "تأیید شده",
+        "REJECTED": "نیاز به اصلاح",
+        "COMPLETE": "تکلیف کامل",
+        "INCOMPLETE": "تکلیف ناقص",
+        "INCORRECT": "تکلیف نادرست",
+    }.get(status, "نامشخص")
+
+
+async def get_math_submission_class_id(session, user):
+    if user.role == "STUDENT":
+        student = (await session.execute(
+            select(Student).where(Student.user_id == user.id)
+        )).scalar_one_or_none()
+        return student.class_id if student and student.class_id else None
+    if user.role == "ASSIGNER":
+        # A determiner is also a student. Use their authorized math class first;
+        # if subject metadata is incomplete, fall back to their first assigned class.
+        class_id = await session.scalar(
+            select(Access.class_id)
+            .join(Subject, Subject.id == Access.subject_id, isouter=True)
+            .where(
+                Access.assigner_user_id == user.id,
+                or_(Subject.name.ilike("%ریاضی%"), Subject.teacher_name.ilike("%طلعتی%"))
+            )
+            .order_by(Access.class_id).limit(1)
+        )
+        if class_id is None:
+            class_id = await session.scalar(
+                select(Access.class_id).where(Access.assigner_user_id == user.id)
+                .order_by(Access.class_id).limit(1)
+            )
+        return class_id
+    return None
+
+
 async def create_announcement(bot, title, body, class_id, kind, scheduled_at, creator_id):
     async with SessionLocal() as s:
         a = Announcement(title=title, body=body, class_id=class_id, kind=kind, scheduled_at=scheduled_at, created_by=creator_id, sent=False)
@@ -2202,7 +2399,140 @@ async def create_announcement(bot, title, body, class_id, kind, scheduled_at, cr
     return aid
 
 
+async def send_talati_daily_report(bot, report_date):
+    teacher_chat_id = await get_system_setting("talati_teacher_telegram_id")
+    if not teacher_chat_id:
+        log.warning("Daily Talati report skipped: teacher Telegram ID has not been configured.")
+        return False
+    try:
+        chat_id = int(teacher_chat_id)
+    except ValueError:
+        log.error("Daily Talati report skipped: configured teacher Telegram ID is invalid.")
+        return False
+
+    async with SessionLocal() as s:
+        classes = (await s.execute(
+            select(ClassRoom.id, ClassRoom.name)
+            .join(Subject, Subject.class_id == ClassRoom.id)
+            .where(Subject.teacher_name.ilike("%طلعتی%"))
+            .distinct()
+            .order_by(ClassRoom.name)
+        )).all()
+        submissions = (await s.execute(
+            select(HomeworkSubmission, User)
+            .join(User, User.id == HomeworkSubmission.student_user_id)
+            .where(HomeworkSubmission.teacher_name == "استاد طلعتی")
+            .order_by(HomeworkSubmission.created_at, HomeworkSubmission.id)
+        )).all()
+        class_map = {cid: name for cid, name in classes}
+        day_submissions = [
+            (item, student) for item, student in submissions
+            if item.created_at and item.created_at.astimezone(TZ).date().isoformat() == report_date
+        ]
+        report_class_ids = set(class_map)
+        report_class_ids.update(item.class_id for item, _ in day_submissions)
+        roster = []
+        if report_class_ids:
+            roster = (await s.execute(
+                select(Student, User, ClassRoom)
+                .join(User, User.id == Student.user_id)
+                .join(ClassRoom, ClassRoom.id == Student.class_id, isouter=True)
+                .where(Student.class_id.in_(report_class_ids))
+                .order_by(ClassRoom.name, User.name)
+            )).all()
+        reviewer_names = {}
+        for item, _ in day_submissions:
+            if item.reviewed_by and item.reviewed_by not in reviewer_names:
+                reviewer = await s.get(User, item.reviewed_by)
+                reviewer_names[item.reviewed_by] = reviewer.name if reviewer else "تعیین‌کننده"
+        sent_user_ids = {item.student_user_id for item, _ in day_submissions}
+        # The determiner is also a student; include their submission in the same list.
+        sent_lines = []
+        buttons = []
+        for item, student in day_submissions:
+            sent_lines.append(
+                f"• {student.name or 'بدون نام'} | {format_jalali_dt(item.created_at)}"
+                f" | وضعیت: {submission_status_label(item.status)}"
+                f" | تأییدکننده: {reviewer_names.get(item.reviewed_by, 'هنوز بررسی نشده')}"
+            )
+            buttons.append([InlineKeyboardButton(
+                f"👤 {student.name or 'دانش‌آموز'} — #{item.id}",
+                callback_data=f"report:view:{item.id}",
+                style="primary",
+            )])
+        missing_names = []
+        seen_users = set()
+        for student, user, cls in roster:
+            if user.id not in sent_user_ids and user.id not in seen_users:
+                seen_users.add(user.id)
+                missing_names.append(f"• {user.name or 'بدون نام'}" + (f" — {cls.name}" if cls else ""))
+        # Include any submission classes without subject-teacher metadata in the roster
+        body = (
+            f"📊 گزارش روزانه تکالیف ریاضی — استاد طلعتی\n"
+            f"📅 تاریخ: {report_date}\n"
+            f"📥 تعداد ارسال‌ها: {len(day_submissions)}\n"
+            f"⏳ ارسال‌نکرده‌ها: {len(missing_names)}\n\n"
+            f"✅ دانش‌آموزانی که تکلیف فرستاده‌اند:\n"
+            + ("\n".join(sent_lines) if sent_lines else "امروز ارسالی ثبت نشده است.")
+            + "\n\n❌ دانش‌آموزانی که تکلیف نفرستاده‌اند:\n"
+            + ("\n".join(missing_names) if missing_names else "فهرست دانش‌آموز ارسال‌نکرده‌ای پیدا نشد.")
+            + "\n\nبرای مشاهده عکس‌های تکلیف، روی نام دانش‌آموز بزنید."
+        )
+    buttons.append([InlineKeyboardButton("🔄 به‌روزرسانی گزارش", callback_data="report:refresh", style="primary")])
+    try:
+        await send_long(bot, chat_id, body, reply_markup=InlineKeyboardMarkup(buttons))
+    except Exception:
+        log.exception("Sending daily Talati homework report failed")
+        return False
+    return True
+
+
+async def cleanup_temporary_school_data():
+    """Delete only explicitly temporary school content; retain people, audit logs,
+    schedules, notes, and all photo-submission/review records."""
+    async with SessionLocal() as s:
+        announcement_ids = list((await s.execute(
+            select(Announcement.id).where(Announcement.kind.in_(("announcement", "tomorrow")))
+        )).scalars().all())
+        if announcement_ids:
+            await s.execute(delete(Delivery).where(Delivery.announcement_id.in_(announcement_ids)))
+            await s.execute(delete(Announcement).where(Announcement.id.in_(announcement_ids)))
+        assignment_count = await s.scalar(select(func.count(Assignment.id)))
+        exam_count = await s.scalar(select(func.count(Exam.id)))
+        await s.execute(delete(Assignment))
+        await s.execute(delete(Exam))
+        await s.commit()
+    log.info(
+        "Temporary school content cleanup completed: announcements=%s assignments=%s exams=%s; "
+        "student accounts, photo submissions, review history, notes, schedules and activity logs retained",
+        len(announcement_ids), assignment_count or 0, exam_count or 0,
+    )
+
+
+async def run_daily_maintenance(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now(TZ)
+    today = now.date().isoformat()
+    # Once daily, during the 03:00 hour; a stored date prevents duplicate work.
+    if now.hour == 3:
+        last_cleanup = await get_system_setting("last_temporary_cleanup_date")
+        if last_cleanup != today:
+            await cleanup_temporary_school_data()
+            await set_system_setting("last_temporary_cleanup_date", today)
+
+    # Retry the report through the night if the teacher ID has not yet been set
+    # or Telegram was temporarily unavailable. Never send twice for the same date.
+    if now.hour >= 22 or now.hour < 3:
+        last_report = await get_system_setting("last_talati_report_date")
+        if last_report != today:
+            if await send_talati_daily_report(context.bot, today):
+                await set_system_setting("last_talati_report_date", today)
+
+
 async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await run_daily_maintenance(context)
+    except Exception:
+        log.exception("daily maintenance failed; it will be retried on the next scheduler tick")
     now = datetime.now(timezone.utc)
     async with SessionLocal() as s:
         data = (await s.execute(select(Announcement).where(Announcement.sent.is_(False), Announcement.scheduled_at.is_not(None), Announcement.scheduled_at <= now))).scalars().all()
@@ -2597,7 +2927,7 @@ async def notify_assigners_submission(bot, submission_id: int, class_id: int, st
 
 
 async def finalize_submission_review(bot, reviewer, submission_id: int, status: str, note: str = ""):
-    if status not in ("APPROVED", "REJECTED"):
+    if status not in ("APPROVED", "REJECTED", "COMPLETE", "INCOMPLETE", "INCORRECT"):
         raise ValueError("وضعیت بررسی معتبر نیست.")
     async with SessionLocal() as s:
         submission = (await s.execute(
@@ -2634,6 +2964,8 @@ async def finalize_submission_review(bot, reviewer, submission_id: int, status: 
     if should_notify and telegram_id:
         if status == "APPROVED":
             message_text = f"✅ تکلیف تصویری شما تأیید شد.\nشماره پیگیری: #{submission_id}"
+        elif status in ("COMPLETE", "INCOMPLETE", "INCORRECT"):
+            message_text = f"📋 وضعیت تکلیف تصویری شما: {submission_status_label(status)}\nشماره پیگیری: #{submission_id}"
         else:
             message_text = f"❌ تکلیف تصویری شما رد شد.\nشماره پیگیری: #{submission_id}"
             if note:
@@ -3220,6 +3552,21 @@ async def process_state(update, context, u):
             "نمایش": []
         }
     }
+    if u.role == "ADMIN" and state == "admin_talati_report_id":
+        value = text.strip()
+        if value == "حذف":
+            await set_system_setting("talati_teacher_telegram_id", "")
+            context.user_data.clear()
+            await reply_long(update.message, "✅ شناسه استاد طلعتی پاک شد. تا زمان ثبت شناسه جدید، گزارش خودکار ارسال نمی‌شود.", reply_markup=keyboard(ADMIN_MENU))
+            return True
+        if not value.isdigit() or int(value) <= 0:
+            await reply_long(update.message, "❌ شناسه باید یک عدد مثبت باشد. دوباره شناسه عددی تلگرام معلم را بفرستید یا «حذف» را وارد کنید.")
+            return True
+        await set_system_setting("talati_teacher_telegram_id", value)
+        context.user_data.clear()
+        await reply_long(update.message, f"✅ شناسه تلگرام استاد طلعتی ذخیره شد: {value}\nگزارش روزانه از ساعت ۱۰ شب به این شناسه ارسال می‌شود.", reply_markup=keyboard(ADMIN_MENU))
+        return True
+
     if u.role == "ADMIN" and state in admin_wizard_specs:
         flow = context.user_data.get("admin_flow")
         if not flow:
@@ -3990,7 +4337,11 @@ async def photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _photo_message_locked(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = await db_user(update.effective_user.id)
     state = context.user_data.get("state")
-    if not u or not u.active or u.role != "STUDENT":
+    if not u or not u.active or u.role not in ("STUDENT", "ASSIGNER"):
+        return
+    if not submission_window_open():
+        await reply_long(update.message, "⏰ مهلت ارسال تکلیف تا ساعت ۹ شب است. ارسال امروز بسته شده است.", reply_markup=back_to_panel_markup(u.role))
+        context.user_data.clear()
         return
     if state not in ("student_math_wait_photo", "student_math_more"):
         await reply_long(
@@ -4208,7 +4559,7 @@ def main():
         .build()
     )
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:m:|menu:|auth:|wizard:|note_date:|action:|mathsub:|submission:|adminnotify:|studentperm:|assignerperm:)"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:m:|menu:|auth:|wizard:|note_date:|action:|mathsub:|submission:|report:|adminnotify:|studentperm:|assignerperm:)"))
     app.add_handler(MessageHandler(filters.PHOTO, photo_message))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
