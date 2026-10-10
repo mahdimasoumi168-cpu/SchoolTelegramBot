@@ -3554,8 +3554,8 @@ async def process_state(update, context, u):
             "حذف": [("id","شناسه دانش‌آموز را ارسال کنید:")]
         },
         "admin_assigner": {
-            "افزودن": [("username","نام کاربری را ارسال کنید:"),("password","رمز عبور را ارسال کنید:"),("name","نام و نام خانوادگی را ارسال کنید:")],
-            "ویرایش": [("id","شناسه تعیین‌کننده را ارسال کنید:"),("username","نام کاربری جدید را ارسال کنید:"),("password","رمز عبور جدید را ارسال کنید:"),("name","نام جدید را ارسال کنید:")],
+            "افزودن": [("username","نام کاربری را ارسال کنید:"),("password","رمز عبور را ارسال کنید:"),("name","نام و نام خانوادگی را ارسال کنید:"),("class","نام کلاس این تعیین‌کننده را دقیقاً مطابق فهرست کلاس‌ها وارد کنید:")],
+            "ویرایش": [("id","شناسه تعیین‌کننده را ارسال کنید:"),("username","نام کاربری جدید را ارسال کنید:"),("password","رمز عبور جدید را ارسال کنید:"),("name","نام جدید را ارسال کنید:"),("class","نام کلاس جدید را ارسال کنید:")],
             "حذف": [("id","شناسه تعیین‌کننده را ارسال کنید:")]
         },
         "admin_class": {
@@ -3844,14 +3844,21 @@ async def process_state(update, context, u):
                     else: raise ValueError("فرمت: افزودن|کد مدرسه|نام|کلاس / ویرایش|شناسه|کد|نام|کلاس / حذف|شناسه")
                 elif state == "admin_assigner":
                     p=[x.strip() for x in text.split("|")]
-                    if p[0]=="افزودن" and len(p)==4:
-                        username,password,name=p[1:]
+                    if p[0]=="افزودن" and len(p)==5:
+                        username,password,name,clsname=p[1:]
                         username = norm_username(username)
                         if not username: raise ValueError("نام کاربری نمی‌تواند خالی باشد.")
                         if len(password)<6: raise ValueError("رمز عبور باید حداقل ۶ کاراکتر باشد.")
                         if await s.scalar(select(User.id).where(User.login_username==username).limit(1)): raise ValueError("نام کاربری تکراری است.")
-                        target=User(telegram_id=None,name=name,role="ASSIGNER",active=True,login_username=username,password_hash=hash_password(password)); s.add(target); await s.commit(); await log_action(u.id,"assigner_provisioned",username); await reply_long(update.message, "✅ تعیین‌کننده ثبت شد.")
-                    elif p[0]=="ویرایش" and len(p)==5:
+                        c0=await get_class_by_name(s,clsname)
+                        if not c0: raise ValueError("کلاس پیدا نشد؛ نام کلاس را دقیقاً مطابق «مدیریت کلاس‌ها» وارد کنید.")
+                        class_subjects=(await s.execute(select(Subject).where(Subject.class_id==c0.id).order_by(Subject.id))).scalars().all()
+                        if not class_subjects: raise ValueError("برای این کلاس هنوز درسی ثبت نشده است. ابتدا از «مدیریت درس‌ها» درس‌های کلاس را ثبت کنید، سپس تعیین‌کننده را بسازید.")
+                        target=User(telegram_id=None,name=name,role="ASSIGNER",active=True,login_username=username,password_hash=hash_password(password)); s.add(target); await s.flush()
+                        for subject in class_subjects:
+                            s.add(Access(assigner_user_id=target.id,class_id=c0.id,subject_id=subject.id))
+                        await s.commit(); await log_action(u.id,"assigner_provisioned",f"{username}|class={c0.name}|subjects={len(class_subjects)}"); await reply_long(update.message, f"✅ تعیین‌کننده ثبت شد.\n👤 {name}\n🏫 کلاس: {c0.name}\n📚 دسترسی به {len(class_subjects)} درس این کلاس داده شد.")
+                    elif p[0]=="ویرایش" and len(p)==6:
                         target=await s.get(User,int(p[1]))
                         if not target or target.role!="ASSIGNER": raise ValueError("تعیین‌کننده پیدا نشد.")
                         if len(p[3])<6: raise ValueError("رمز عبور باید حداقل ۶ کاراکتر باشد.")
@@ -3859,8 +3866,15 @@ async def process_state(update, context, u):
                         if not username: raise ValueError("نام کاربری نمی‌تواند خالی باشد.")
                         duplicate=await s.scalar(select(User.id).where(User.login_username==username,User.id!=target.id).limit(1))
                         if duplicate: raise ValueError("نام کاربری جدید تکراری است.")
+                        c0=await get_class_by_name(s,p[5])
+                        if not c0: raise ValueError("کلاس پیدا نشد؛ نام کلاس را دقیقاً مطابق «مدیریت کلاس‌ها» وارد کنید.")
+                        class_subjects=(await s.execute(select(Subject).where(Subject.class_id==c0.id).order_by(Subject.id))).scalars().all()
+                        if not class_subjects: raise ValueError("برای این کلاس هنوز درسی ثبت نشده است؛ ابتدا درس‌های کلاس را ثبت کنید.")
                         target.login_username,target.password_hash,target.name,target.active=username,hash_password(p[3]),p[4],True
-                        await s.commit(); await reply_long(update.message, "✅ تعیین‌کننده ویرایش شد.")
+                        await s.execute(delete(Access).where(Access.assigner_user_id==target.id))
+                        for subject in class_subjects:
+                            s.add(Access(assigner_user_id=target.id,class_id=c0.id,subject_id=subject.id))
+                        await s.commit(); await log_action(u.id,"assigner_class_changed",f"{target.id}|class={c0.name}|subjects={len(class_subjects)}"); await reply_long(update.message, f"✅ اطلاعات تعیین‌کننده ویرایش شد.\n🏫 کلاس: {c0.name}\n📚 دسترسی به {len(class_subjects)} درس این کلاس تنظیم شد.")
                     elif p[0]=="حذف" and len(p)==2:
                         target=await s.get(User,int(p[1]))
                         if not target or target.role!="ASSIGNER": raise ValueError("تعیین‌کننده پیدا نشد.")
