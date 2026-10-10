@@ -80,7 +80,15 @@ class SchoolBotSmokeTests(unittest.TestCase):
             app.talati_report_target_date(datetime(2026, 10, 11, 2, 59, tzinfo=tz)),
             "2026-10-10",
         )
-        self.assertIsNone(app.talati_report_target_date(datetime(2026, 10, 11, 3, 0, tzinfo=tz)))
+        self.assertEqual(
+            app.talati_report_target_date(datetime(2026, 10, 11, 3, 0, tzinfo=tz)),
+            "2026-10-10",
+        )
+        self.assertEqual(
+            app.talati_report_target_date(datetime(2026, 10, 11, 5, 59, tzinfo=tz)),
+            "2026-10-10",
+        )
+        self.assertIsNone(app.talati_report_target_date(datetime(2026, 10, 11, 6, 0, tzinfo=tz)))
         self.assertIsNone(app.talati_report_target_date(datetime(2026, 10, 11, 21, 59, tzinfo=tz)))
 
     def test_cleanup_window_catches_up_without_deleting_late_day_content(self):
