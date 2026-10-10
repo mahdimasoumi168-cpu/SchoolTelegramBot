@@ -2517,6 +2517,11 @@ async def cleanup_temporary_school_data():
         await s.execute(delete(Assignment))
         await s.execute(delete(Exam))
         await s.commit()
+    await log_action(
+        None,
+        "daily_temporary_content_cleanup",
+        f"announcements={len(announcement_ids)}|assignments={assignment_count or 0}|exams={exam_count or 0}",
+    )
     log.info(
         "Temporary school content cleanup completed: announcements=%s assignments=%s exams=%s; "
         "student accounts, photo submissions, review history, notes, schedules and activity logs retained",
