@@ -885,6 +885,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # into the generic "operation failed" message. The exact callback/state is
     # logged so the failing management action can be fixed without losing the
     # user's current session.
+    # Acknowledge Telegram inline-button presses BEFORE waiting for the per-user
+    # lock. Otherwise a long-running message handler can leave the button spinner
+    # active until Telegram times out, making the button appear dead.
+    await safe_answer_callback(query)
     async with get_user_lock(query.from_user.id):
         try:
             return await _menu_callback_locked(update, context)
@@ -919,7 +923,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     if not query or not query.from_user:
         return
-    await safe_answer_callback(query)
+    # The callback was acknowledged in menu_callback before lock acquisition.
     data = query.data or ""
     if data == "auth:student":
         context.user_data.clear()
