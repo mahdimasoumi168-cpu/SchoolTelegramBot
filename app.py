@@ -2364,7 +2364,7 @@ def talati_report_target_date(now=None):
     local_now = (now or datetime.now(TZ)).astimezone(TZ)
     if local_now.hour >= 22:
         return local_now.date().isoformat()
-    if local_now.hour < 3:
+    if local_now.hour < 6:
         return (local_now.date() - timedelta(days=1)).isoformat()
     return None
 
