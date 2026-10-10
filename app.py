@@ -1087,7 +1087,8 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             if not is_recipient and (not u or not u.active or u.role not in ("ADMIN", "ASSIGNER")):
                 await reply_long(query.message, "برای به‌روزرسانی این گزارش دسترسی ندارید.")
                 return
-            sent = await send_talati_daily_report(context.bot, datetime.now(TZ).date().isoformat())
+            report_date = talati_report_target_date() or datetime.now(TZ).date().isoformat()
+            sent = await send_talati_daily_report(context.bot, report_date)
             await reply_long(query.message, "✅ گزارش تازه به شناسه تنظیم‌شده استاد طلعتی ارسال شد." if sent else "❌ گزارش ارسال نشد. شناسه معلم را در مدیریت بررسی کنید و دوباره تلاش کنید.")
             return
         if action == "view" and len(parts) == 3:
