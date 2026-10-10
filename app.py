@@ -4126,7 +4126,7 @@ def main():
         .build()
     )
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:menu:|auth:|wizard:|note_date:|action:|mathsub:|submission:|adminnotify:|studentperm:|assignerperm:)"))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^(?:m:|menu:|auth:|wizard:|note_date:|action:|mathsub:|submission:|adminnotify:|studentperm:|assignerperm:)"))
     app.add_handler(MessageHandler(filters.PHOTO, photo_message))
     app.add_handler(MessageHandler(filters.Document.ALL, document_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
