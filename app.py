@@ -288,6 +288,7 @@ class HomeworkSubmission(Base):
     status: Mapped[str] = mapped_column(String(20), default="PENDING", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    teacher_name: Mapped[str] = mapped_column(String(50), default="", nullable=False)
     reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     review_note: Mapped[str] = mapped_column(Text, default="")
     student_notified: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1004,6 +1005,18 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
         if not u or not u.active or u.role != "STUDENT":
             await reply_long(query.message, "برای این عملیات باید با حساب دانش‌آموز وارد شوید.")
             return
+        if action.startswith("teacher:"):
+            teacher_key = action.split(":", 1)[1]
+            teachers = {"salemi": "استاد سالمی", "talati": "استاد طلعتی"}
+            teacher_name = teachers.get(teacher_key)
+            if not teacher_name:
+                await reply_long(query.message, "انتخاب استاد معتبر نیست؛ دوباره ارسال تکالیف ریاضی را آغاز کنید.", reply_markup=back_to_panel_markup("STUDENT"))
+                return
+            context.user_data["math_teacher_name"] = teacher_name
+            context.user_data["math_submission_photos"] = []
+            context.user_data["state"] = "student_math_wait_photo"
+            await reply_long(query.message, f"📸 ارسال تکالیف ریاضی برای {teacher_name}\n\nلطفاً عکس واضح تکلیف را ارسال کنید. بعد از هر عکس می‌توانید عکس دیگری اضافه کنید یا ثبت نهایی را بزنید.", reply_markup=navigation_markup())
+            return
         if action == "more":
             if context.user_data.get("state") != "student_math_more":
                 await reply_long(query.message, "این مرحله معتبر نیست؛ ارسال تکلیف را دوباره آغاز کنید.")
@@ -1013,6 +1026,15 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
             return
         if action == "finish":
             photos = context.user_data.get("math_submission_photos", [])
+            teacher_name = context.user_data.get("math_teacher_name")
+            if teacher_name not in ("استاد سالمی", "استاد طلعتی"):
+                context.user_data["state"] = "student_math_choose_teacher"
+                await reply_long(query.message, "ابتدا مشخص کنید تکلیف برای کدام استاد است:", reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("👨‍🏫 استاد سالمی", callback_data="mathsub:teacher:salemi", style="primary")],
+                    [InlineKeyboardButton("👨‍🏫 استاد طلعتی", callback_data="mathsub:teacher:talati", style="primary")],
+                    [InlineKeyboardButton("❌ انصراف", callback_data="menu:__CANCEL__", style="danger")],
+                ]))
+                return
             if not photos:
                 await reply_long(query.message, "هنوز عکسی دریافت نشده است. ابتدا عکس تکلیف را ارسال کنید.", reply_markup=navigation_markup())
                 return
@@ -1023,13 +1045,13 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                     context.user_data.clear()
                     return
                 class_id = student.class_id
-                item = HomeworkSubmission(student_user_id=u.id, class_id=class_id, photos=json.dumps(photos, ensure_ascii=False), status="PENDING")
+                item = HomeworkSubmission(student_user_id=u.id, class_id=class_id, photos=json.dumps(photos, ensure_ascii=False), teacher_name=teacher_name, status="PENDING")
                 s.add(item)
                 await s.commit()
                 await s.refresh(item)
                 submission_id = item.id
             context.user_data.clear()
-            await notify_assigners_submission(context.bot, submission_id, class_id, u.name or "دانش‌آموز")
+            await notify_assigners_submission(context.bot, submission_id, class_id, u.name or "دانش‌آموز", teacher_name)
             await reply_long(query.message, f"✅ تکلیف تصویری شما با موفقیت ثبت شد.\nشماره پیگیری: #{submission_id}\nپس از بررسی، نتیجه برایتان ارسال می‌شود.", reply_markup=back_to_panel_markup("STUDENT"))
             return
         return
@@ -1079,6 +1101,7 @@ async def _menu_callback_locked(update: Update, context: ContextTypes.DEFAULT_TY
                 details = (
                     f"📥 بررسی تکلیف تصویری #{item.id}\n"
                     f"👤 دانش‌آموز: {student.name if student else 'نامشخص'}\n"
+                    f"👨‍🏫 استاد: {item.teacher_name or 'مشخص نشده'}\n"
                     f"🏫 کلاس: {cls.name if cls else 'نامشخص'}\n"
                     f"🆔 کد مدرسه: {st.school_code if st else '---'}\n"
                     f"📅 زمان ارسال: {format_jalali_dt(item.created_at)}\n"
@@ -1433,9 +1456,14 @@ async def show_student(update, u, context=None):
         await send_student_entry_digest(context.bot, u)
         await reply_panel_text(update.message, "👨‍🎓 پنل دانش‌آموز آماده است. از گزینه‌های زیر استفاده کنید.", u)
     elif t == "📸 ارسال تکالیف ریاضی":
-        context.user_data["state"] = "student_math_wait_photo"
+        context.user_data["state"] = "student_math_choose_teacher"
+        context.user_data.pop("math_teacher_name", None)
         context.user_data["math_submission_photos"] = []
-        await reply_long(update.message, "📸 ارسال تکالیف ریاضی\n\nلطفاً عکس واضح تکلیف خود را ارسال کنید. بعد از هر عکس می‌توانید عکس دیگری اضافه کنید یا ثبت نهایی را بزنید.", reply_markup=navigation_markup())
+        await reply_long(update.message, "📸 ارسال تکالیف ریاضی\n\nتکلیف برای کدام استاد است؟", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("👨‍🏫 استاد سالمی", callback_data="mathsub:teacher:salemi", style="primary")],
+            [InlineKeyboardButton("👨‍🏫 استاد طلعتی", callback_data="mathsub:teacher:talati", style="primary")],
+            [InlineKeyboardButton("❌ انصراف", callback_data="menu:__CANCEL__", style="danger")],
+        ]))
     elif t == "📚 درس‌های من":
         async with SessionLocal() as s:
             st = (await s.execute(select(Student).where(Student.user_id == u.id))).scalar_one_or_none()
@@ -2449,7 +2477,7 @@ async def send_submission_list(message, assigner, page: int = 0):
 
     buttons = [
         [InlineKeyboardButton(
-            f"📝 #{sub.id} — {user.name or 'دانش‌آموز'}",
+            f"📝 #{sub.id} — {user.name or 'دانش‌آموز'} — {sub.teacher_name or 'استاد نامشخص'}",
             callback_data=f"submission:view:{sub.id}",
             style="primary",
         )]
@@ -2493,7 +2521,7 @@ async def send_assigner_entry_alert(bot, assigner, chat_id):
         )
 
 
-async def notify_assigners_submission(bot, submission_id: int, class_id: int, student_name: str):
+async def notify_assigners_submission(bot, submission_id: int, class_id: int, student_name: str, teacher_name: str = ""):
     async with SessionLocal() as s:
         recipients = (await s.execute(
             select(User).join(Access, Access.assigner_user_id == User.id)
@@ -2515,7 +2543,7 @@ async def notify_assigners_submission(bot, submission_id: int, class_id: int, st
             await send_long(
                 bot,
                 telegram_id,
-                f"📥 تکلیف تصویری جدید از {student_name} ثبت شد.",
+                f"📥 تکلیف تصویری جدید ثبت شد.\n👤 دانش‌آموز: {student_name}\n👨‍🏫 استاد: {teacher_name or 'مشخص نشده'}",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton(
                         "بازبینی تکلیف",
@@ -4047,6 +4075,11 @@ async def init_db():
                 await migration_conn.close()
     else:
         await asyncio.to_thread(upgrade_database)
+
+    if engine.dialect.name == "postgresql":
+        # Additive, backward-compatible schema change for existing Railway databases.
+        async with engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE homework_submissions ADD COLUMN IF NOT EXISTS teacher_name VARCHAR(50) NOT NULL DEFAULT ''"))
 
     if ADMIN_TELEGRAM_ID:
         async with SessionLocal() as s:
