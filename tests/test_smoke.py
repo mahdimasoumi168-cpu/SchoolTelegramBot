@@ -51,6 +51,31 @@ class SchoolBotSmokeTests(unittest.TestCase):
         self.assertIn("📸 ارسال تکالیف ریاضی", labels)
         self.assertNotIn("📸 ارسال تکالیف ریاضی سالمی", labels)
 
+    def test_math_submission_cutoff_is_9pm_tehran(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Asia/Tehran")
+        self.assertTrue(app.submission_window_open(datetime(2026, 10, 10, 20, 59, tzinfo=tz)))
+        self.assertFalse(app.submission_window_open(datetime(2026, 10, 10, 21, 0, tzinfo=tz)))
+        self.assertFalse(app.submission_window_open(datetime(2026, 10, 10, 23, 0, tzinfo=tz)))
+
+    def test_talati_report_status_labels(self):
+        self.assertEqual(app.submission_status_label("COMPLETE"), "تکلیف کامل")
+        self.assertEqual(app.submission_status_label("INCOMPLETE"), "تکلیف ناقص")
+        self.assertEqual(app.submission_status_label("INCORRECT"), "تکلیف نادرست")
+
+    def test_persistent_system_settings_table_exists(self):
+        import asyncio
+
+        async def run():
+            await app.init_db()
+            async with app.SessionLocal() as session:
+                table_name = await session.scalar(app.text("SELECT to_regclass('system_settings')"))
+                self.assertEqual(table_name, "system_settings")
+            await app.engine.dispose()
+
+        asyncio.run(run())
+
     def test_primary_railway_guard_defaults_to_production_service(self):
         self.assertTrue(app.ENFORCE_PRIMARY_RAILWAY_SERVICE)
         self.assertEqual(app.PRIMARY_RAILWAY_SERVICE_ID, "5a6ef693-0b2b-4f18-bd9c-e3ac1cb4bb81")
