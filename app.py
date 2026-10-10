@@ -409,6 +409,7 @@ ASSIGNER_PERMISSION_FIELDS = {
     "📚 درس‌ها": "lessons_enabled",
     "📝 تکالیف": "assignments_enabled",
     "📤 ارسال تکالیف ریاضی": "assignments_enabled",
+    "📸 ارسال تکالیف ریاضی": "assignments_enabled",
     "📢 ارسال اطلاعیه": "announcements_enabled",
     "📅 برنامه هفتگی": "schedule_enabled",
     "📝 امتحانات": "exams_enabled",
