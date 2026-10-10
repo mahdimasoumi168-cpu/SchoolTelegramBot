@@ -64,6 +64,40 @@ class SchoolBotSmokeTests(unittest.TestCase):
         self.assertEqual(app.submission_status_label("INCOMPLETE"), "تکلیف ناقص")
         self.assertEqual(app.submission_status_label("INCORRECT"), "تکلیف نادرست")
 
+    def test_talati_report_retries_previous_date_after_midnight(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Asia/Tehran")
+        self.assertEqual(
+            app.talati_report_target_date(datetime(2026, 10, 10, 22, 0, tzinfo=tz)),
+            "2026-10-10",
+        )
+        self.assertEqual(
+            app.talati_report_target_date(datetime(2026, 10, 11, 0, 15, tzinfo=tz)),
+            "2026-10-10",
+        )
+        self.assertEqual(
+            app.talati_report_target_date(datetime(2026, 10, 11, 2, 59, tzinfo=tz)),
+            "2026-10-10",
+        )
+        self.assertIsNone(app.talati_report_target_date(datetime(2026, 10, 11, 3, 0, tzinfo=tz)))
+        self.assertIsNone(app.talati_report_target_date(datetime(2026, 10, 11, 21, 59, tzinfo=tz)))
+
+    def test_cleanup_window_catches_up_without_deleting_late_day_content(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Asia/Tehran")
+        self.assertTrue(app.temporary_cleanup_window_open(datetime(2026, 10, 10, 3, 0, tzinfo=tz)))
+        self.assertTrue(app.temporary_cleanup_window_open(datetime(2026, 10, 10, 5, 59, tzinfo=tz)))
+        self.assertFalse(app.temporary_cleanup_window_open(datetime(2026, 10, 10, 6, 0, tzinfo=tz)))
+        self.assertFalse(app.temporary_cleanup_window_open(datetime(2026, 10, 10, 23, 0, tzinfo=tz)))
+
+    def test_new_assignments_and_exams_are_temporary_but_legacy_default_is_safe(self):
+        for model in (app.Assignment, app.Exam):
+            column = model.__table__.c.is_temporary
+            self.assertTrue(column.default.arg)
+            self.assertEqual(str(column.server_default.arg).upper(), "FALSE")
+
     def test_persistent_system_settings_table_exists(self):
         import asyncio
 
